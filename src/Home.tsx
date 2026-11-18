@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { supabase } from './supabase'
+import { useInstall } from './install'
 
 type Row = { workspace_id: string; role: string; last_read_at: string; workspaces: { name: string } | null; unread: number }
 
@@ -10,6 +11,7 @@ export function Home({ me, email, joinCode, onSignOut }: { me: string; email: st
   const [displayName, setDisplayName] = useState('')
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+  const install = useInstall()
 
   useEffect(() => {
     supabase
@@ -69,6 +71,7 @@ export function Home({ me, email, joinCode, onSignOut }: { me: string; email: st
         <h1>Track</h1>
         <span className="row">
           <span className="muted">{email}</span>
+          {install && <button className="primary" onClick={install}>Install app</button>}
           <button onClick={onSignOut}>Sign out</button>
         </span>
       </header>

@@ -19,6 +19,8 @@ function between(before: string | null, after: string | null): string {
   }
 }
 
+const starterColumns = ['To do', 'In progress', 'QA', 'Release']
+
 type Edge = 'before' | 'after' | null
 const edgeOf = (el: Element, x: number, y: number, horizontal: boolean): Edge => {
   const r = el.getBoundingClientRect()
@@ -30,6 +32,7 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
   const [cards, setCards] = useState<Card[]>([])
   const [openCard, setOpenCard] = useState<string | null>(null)
   const [newList, setNewList] = useState('')
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
 
   const load = async () => {
@@ -40,6 +43,7 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
     if (l.error || c.error) return setError((l.error ?? c.error)!.message)
     setLists(l.data as List[])
     setCards(c.data as Card[])
+    setLoaded(true)
   }
 
   useEffect(() => {
@@ -88,7 +92,7 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
     const position = between(others[index - 1]?.position ?? null, others[index]?.position ?? null)
     setLists((p) => p.map((l) => (l.id === id ? { ...l, position } : l)))
     void save(supabase.from('lists').update({ position }).eq('id', id), true)
-    announce(`List moved to position ${index + 1} of ${others.length + 1}`)
+    announce(`Column moved to position ${index + 1} of ${others.length + 1}`)
   }
 
   // Latest state for the drop handler, which is registered once.
@@ -126,12 +130,17 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
     [],
   )
 
+  const addColumns = async (titles: string[]) => {
+    let position = sortedLists.at(-1)?.position ?? null
+    const rows = titles.map((title) => ({ workspace_id: ws.id, title, position: (position = between(position, null)) }))
+    const { data, error } = await supabase.from('lists').insert(rows).select()
+    if (error) return setError(error.message)
+    setLists((p) => (data as List[]).reduce(upsert, p))
+  }
+
   const addList = async (e: FormEvent) => {
     e.preventDefault()
-    const position = between(sortedLists.at(-1)?.position ?? null, null)
-    const { data, error } = await supabase.from('lists').insert({ workspace_id: ws.id, title: newList.trim(), position }).select().single()
-    if (error) return setError(error.message)
-    setLists((p) => upsert(p, data as List))
+    await addColumns([newList.trim()])
     setNewList('')
   }
 
@@ -160,7 +169,7 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
             onMove={(dir) => moveList(list.id, i + dir)}
             onRename={(title) => save(supabase.from('lists').update({ title }).eq('id', list.id))}
             onDelete={() => {
-              if (!confirm(`Delete list "${list.title}" and all its cards?`)) return
+              if (!confirm(`Delete column "${list.title}" and all its cards?`)) return
               setLists((p) => p.filter((l) => l.id !== list.id))
               void save(supabase.from('lists').delete().eq('id', list.id), true)
             }}
@@ -169,8 +178,11 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
           />
         ))}
         <form className="add-list stack" onSubmit={addList}>
-          <input aria-label="New list title" placeholder="Add a list" required maxLength={100} value={newList} onChange={(e) => setNewList(e.target.value)} />
-          <button>Add list</button>
+          <input aria-label="New column name" placeholder="New column, e.g. QA" required maxLength={100} value={newList} onChange={(e) => setNewList(e.target.value)} />
+          <button className="primary">Add column</button>
+          {loaded && sortedLists.length === 0 && (
+            <button type="button" onClick={() => addColumns(starterColumns)}>Start with {starterColumns.join(', ')}</button>
+          )}
         </form>
       </div>
       {card && (
@@ -208,6 +220,7 @@ function ListColumn({ list, cards, names, canLeft, canRight, onMove, onRename, o
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const handle = useRef<HTMLSpanElement>(null)
+  const titleInput = useRef<HTMLInputElement>(null)
   const [edge, setEdge] = useState<Edge>(null)
   const [cardOver, setCardOver] = useState(false)
   const [title, setTitle] = useState(list.title)
@@ -250,13 +263,14 @@ function ListColumn({ list, cards, names, canLeft, canRight, onMove, onRename, o
     <div ref={ref} className={`list ${edge ? `drop-${edge}` : ''} ${cardOver ? 'card-over' : ''}`}>
       <h3 className="list-head row">
         <span ref={handle} className="grip" title="Drag to reorder" aria-hidden="true">::</span>
-        <input aria-label="List title" maxLength={100} value={title} onChange={(e) => setTitle(e.target.value)} onBlur={rename}
+        <input ref={titleInput} aria-label="Column name" maxLength={100} value={title} onChange={(e) => setTitle(e.target.value)} onBlur={rename}
           onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} />
       </h3>
       <div className="row list-tools">
-        <button aria-label={`Move list ${list.title} left`} disabled={!canLeft} onClick={() => onMove(-1)}>&lt;</button>
-        <button aria-label={`Move list ${list.title} right`} disabled={!canRight} onClick={() => onMove(1)}>&gt;</button>
-        <button aria-label={`Delete list ${list.title}`} onClick={onDelete}>Delete</button>
+        <button aria-label={`Move column ${list.title} left`} disabled={!canLeft} onClick={() => onMove(-1)}>&lt;</button>
+        <button aria-label={`Move column ${list.title} right`} disabled={!canRight} onClick={() => onMove(1)}>&gt;</button>
+        <button aria-label={`Rename column ${list.title}`} onClick={() => titleInput.current?.select()}>Rename</button>
+        <button aria-label={`Delete column ${list.title}`} onClick={onDelete}>Delete</button>
       </div>
       <ul className="plain cards">
         {cards.map((c) => (
@@ -388,7 +402,7 @@ function CardEditor({ card, lists, index, count, members, onMove, onClose, onSav
         )}
         <fieldset className="row">
           <legend>Move (saved immediately)</legend>
-          <select aria-label="List" value={card.list_id} onChange={(e) => onMove(card.id, e.target.value, Number.MAX_SAFE_INTEGER)}>
+          <select aria-label="Column" value={card.list_id} onChange={(e) => onMove(card.id, e.target.value, Number.MAX_SAFE_INTEGER)}>
             {lists.map((l) => (
               <option key={l.id} value={l.id}>{l.title}</option>
             ))}

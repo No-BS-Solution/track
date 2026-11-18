@@ -103,7 +103,7 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
   const makeCard = async (m: Message) => {
     const { data: lists } = await supabase.from('lists').select('*').eq('workspace_id', ws.id)
     const first = (lists as List[] | null)?.sort(byPosition)[0]
-    if (!first) return setError('Add a list to the board first.')
+    if (!first) return setError('Add a column to the board first.')
     const { data: cards } = await supabase.from('cards').select('position').eq('list_id', first.id)
     const last = (cards as Pick<Card, 'position'>[] | null)?.map((c) => c.position).sort().pop() ?? null
     const { error } = await supabase.from('cards').insert({

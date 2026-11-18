@@ -3,6 +3,7 @@ import { appUrl, supabase, type Member, type Workspace } from './supabase'
 import { Modal } from './Modal'
 import { Chat } from './Chat'
 import { Board } from './Board'
+import { useInstall } from './install'
 
 export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: string }) {
   const [ws, setWs] = useState<Workspace | null | undefined>(undefined)
@@ -10,6 +11,7 @@ export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: st
   const [tab, setTab] = useState<'chat' | 'board'>('chat')
   const [settings, setSettings] = useState(false)
   const [notify, setNotify] = useState(typeof Notification === 'undefined' ? 'denied' : Notification.permission)
+  const install = useInstall()
 
   const load = useCallback(async () => {
     const [w, m] = await Promise.all([
@@ -42,6 +44,7 @@ export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: st
           <h1>{ws.name}</h1>
         </span>
         <span className="row">
+          {install && <button onClick={install}>Install app</button>}
           {notify === 'default' && (
             <button onClick={() => Notification.requestPermission().then(setNotify)}>Enable notifications</button>
           )}
