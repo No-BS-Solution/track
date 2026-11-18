@@ -5,7 +5,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 // Fail fast if the Supabase config is missing or is a key that must never ship in a public bundle.
 function checkSupabaseEnv(url: string | undefined, key: string | undefined): void {
   const fail = (why: string): never => {
-    throw new Error(`\n\n[tack] ${why}\nSee README "Configuration".\n`)
+    throw new Error(`\n\n[track] ${why}\nSee README "Configuration".\n`)
   }
   if (!url) fail('VITE_SUPABASE_URL is missing. Set it in .env.local or as a GitHub repository secret.')
   if (!key) fail('VITE_SUPABASE_ANON_KEY is missing. Set it in .env.local or as a GitHub repository secret.')
@@ -28,7 +28,7 @@ export default defineConfig(({ mode }) => {
   checkSupabaseEnv(env.VITE_SUPABASE_URL, env.VITE_SUPABASE_ANON_KEY)
   return {
     // Forks deploy under their own repo name: https://<user>.github.io/<repo>/
-    base: env.BASE_PATH || '/tack/',
+    base: env.BASE_PATH || '/track/',
     server: { host: '127.0.0.1', port: 5501, strictPort: true },
     plugins: [
       react(),
@@ -42,8 +42,8 @@ export default defineConfig(({ mode }) => {
         registerType: 'autoUpdate',
         includeAssets: ['favicon.svg'],
         manifest: {
-          name: 'Tack',
-          short_name: 'Tack',
+          name: 'Track',
+          short_name: 'Track',
           description: 'Simple team chat and board',
           theme_color: '#2f6fed',
           background_color: '#ffffff',

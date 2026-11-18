@@ -36,7 +36,7 @@ export function Auth({ notice }: { notice: string }) {
 
   return (
     <main className="auth">
-      <h1>Tack</h1>
+      <h1>Track</h1>
       <form onSubmit={submit} className="stack">
         <h2>{mode === 'signin' ? 'Sign in' : 'Create account'}</h2>
         {message && <p role="alert" className="notice">{message}</p>}

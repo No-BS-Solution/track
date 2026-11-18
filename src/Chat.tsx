@@ -20,8 +20,15 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
         const msg = m as Message
         setMessages((prev) => upsert(prev, msg))
         if (msg.user_id !== me && document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-          const n = new Notification(`${namesRef.current.get(msg.user_id) ?? 'Someone'} in ${ws.name}`, { body: msg.body.slice(0, 200), tag: ws.id })
-          n.onclick = () => window.focus()
+          const title = `${namesRef.current.get(msg.user_id) ?? 'Someone'} in ${ws.name}`
+          const options = { body: msg.body.slice(0, 200), tag: ws.id }
+          // Android Chrome only allows notifications through the service worker; `new Notification` throws there.
+          void navigator.serviceWorker
+            ?.getRegistration()
+            .then((r) => {
+              if (r) return r.showNotification(title, options)
+              new Notification(title, options)
+            })
         }
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `workspace_id=eq.${ws.id}` }, ({ new: m }) =>

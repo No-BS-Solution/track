@@ -38,7 +38,7 @@ export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: st
     <div className="workspace">
       <header className="topbar row spread">
         <span className="row">
-          <a href="#/" aria-label="All workspaces">Tack</a>
+          <a href="#/" aria-label="All workspaces">Track</a>
           <h1>{ws.name}</h1>
         </span>
         <span className="row">

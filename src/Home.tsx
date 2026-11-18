@@ -66,7 +66,7 @@ export function Home({ me, email, joinCode, onSignOut }: { me: string; email: st
   return (
     <main className="home stack">
       <header className="row spread">
-        <h1>Tack</h1>
+        <h1>Track</h1>
         <span className="row">
           <span className="muted">{email}</span>
           <button onClick={onSignOut}>Sign out</button>

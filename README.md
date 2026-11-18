@@ -1,4 +1,4 @@
-# Tack
+# Track
 
 Ultra-simple team chat plus a Trello-style board in one window. A static single-page app on GitHub Pages, installable as a PWA, backed by Supabase.
 
@@ -34,7 +34,7 @@ Ultra-simple team chat plus a Trello-style board in one window. A static single-
 | --- | --- | --- |
 | `VITE_SUPABASE_URL` | yes | Project URL |
 | `VITE_SUPABASE_ANON_KEY` | yes | Anon / publishable key only |
-| `BASE_PATH` | no | URL path the app lives under. Defaults to `/tack/`. CI sets it to `/<repo-name>/`. Use `/` for a `<you>.github.io` repo or a custom domain. |
+| `BASE_PATH` | no | URL path the app lives under. Defaults to `/track/`. CI sets it to `/<repo-name>/`. Use `/` for a `<you>.github.io` repo or a custom domain. |
 
 The build **fails on purpose** if either Supabase variable is missing, or if the key is a secret key (`sb_secret_...`) or a JWT with role `service_role`. Those keys bypass all security and would be published inside the JavaScript bundle. If you ever committed or deployed one, rotate it in the Supabase dashboard.
 
@@ -43,7 +43,7 @@ The build **fails on purpose** if either Supabase variable is missing, or if the
 ```sh
 npm install
 cp .env.example .env.local   # then fill in your URL and anon key
-npm run dev                  # http://127.0.0.1:5501/tack/
+npm run dev                  # http://127.0.0.1:5501/track/
 ```
 
 For a fully local backend (needs Docker):
@@ -53,7 +53,7 @@ npx supabase start           # prints a local URL and anon key for .env.local
 npm run test:db              # pgTAP tests for the access rules
 ```
 
-`supabase/config.toml` already allows `http://127.0.0.1:5501/tack/` as an auth redirect. When pointing a dev build at a hosted project, add that URL to its Redirect URLs too.
+`supabase/config.toml` already allows `http://127.0.0.1:5501/track/` as an auth redirect. When pointing a dev build at a hosted project, add that URL to its Redirect URLs too.
 
 ## Security model
 
@@ -76,7 +76,9 @@ connect-src 'self' https://supabase.example.com wss://supabase.example.com;
 
 ## Notifications
 
-Click "Enable notifications" in a workspace to get a browser notification for new messages while the tab is in the background. On iOS this only works once Tack is installed to the home screen.
+Click "Enable notifications" in a workspace to get a notification for new messages while Track is open in the background. On Android, install it first (Chrome menu > Add to Home screen / Install app). On iOS this only works once Track is installed to the home screen.
+
+Notifications come from the open app, not from a push server, so none arrive after the OS has closed Track. Real push (app fully closed) would need Web Push with a server-side sender, which this project does not include.
 
 ## Tech
 
