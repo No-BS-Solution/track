@@ -4,11 +4,11 @@ Ultra-simple team chat plus a Trello-style board in one window. A static single-
 
 - A **workspace** has one chat and one board.
 - People join with an invite link or code.
-- Two roles: **owner** (rename, delete, remove members) and **member**.
-- Chat with images, @mentions, search and full history.
-- Board with columns, drag and drop, assignees, due dates, checklists, comments and images.
+- Two roles: **owners** (one or more: rename, delete, manage members and roles) and **members**.
+- Chat with images (paste or drag in), replies, reactions, @mentions, search, typing indicator and full history.
+- Board with columns, drag and drop, assignees, due dates, checklists, comments, images, filters and archiving. Share any card into chat.
 - Turn any chat message into a card with "Make card".
-- Push notifications on phones and desktops, even when Track is closed (optional setup, see below).
+- Push notifications on phones and desktops, even when Track is closed, with a per-workspace choice of all messages, @mentions only, or muted (optional setup, see below).
 
 ## Deploy your own (fork)
 

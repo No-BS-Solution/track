@@ -327,3 +327,55 @@ progress.full::-moz-progress-bar { background: var(--danger); }
   .message-actions { position: static; display: flex; border: 0; box-shadow: none; background: transparent; padding: 0; align-self: start; }
   .list-tools { opacity: 1; }
 }
+
+/* Presence */
+.online-count { font-size: 0.8rem; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.online-count::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
+.presence { position: relative; display: inline-flex; }
+.presence.on::after {
+  content: ''; position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--success); border: 2px solid var(--surface);
+}
+.typing { min-height: 1.4em; padding: 0 16px; font-style: italic; }
+
+/* Replies, shared cards, reactions */
+.reply-quote {
+  display: flex; align-items: center; gap: 6px; max-width: 100%; margin: 2px 0 4px; padding: 3px 8px;
+  border-left: 3px solid var(--border); border-radius: 0 6px 6px 0; background: var(--surface-2);
+  font-size: 0.85rem; text-align: left; color: var(--muted);
+}
+.reply-quote span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reply-quote strong { color: var(--text); }
+.reply-quote .icon { width: 14px; height: 14px; }
+.replying { display: flex; align-items: center; gap: 8px; margin: 0 12px; padding: 6px 6px 6px 10px; background: var(--accent-soft); border-radius: var(--radius); font-size: 0.85rem; }
+.replying .grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-link {
+  display: flex; align-items: center; gap: 8px; width: min(100%, 320px); margin-top: 6px; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); text-align: left; font-weight: 550; box-shadow: var(--shadow-sm);
+}
+.card-link:hover { border-color: var(--accent); }
+.reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.reaction { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 0.85rem; }
+.reaction.mine { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.emoji-picker { display: inline-flex; gap: 2px; margin-top: 4px; padding: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--shadow-md); }
+.emoji-picker button { width: 32px; height: 32px; border-radius: 50%; font-size: 1.1rem; }
+.emoji-picker button:hover { background: var(--surface-2); }
+.chat.drag-over::after {
+  content: 'Drop image to send'; position: absolute; inset: 8px; z-index: 20; display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--accent); border-radius: var(--radius-lg); background: var(--accent-soft); color: var(--accent); font-weight: 650;
+}
+
+/* Board toolbar */
+.board-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+.segmented { display: inline-flex; padding: 3px; background: var(--surface-2); border-radius: var(--radius); }
+.segmented button { height: 30px; padding: 0 12px; border-radius: 7px; font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+.segmented button[aria-pressed='true'] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+.board-search { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 36px; width: min(260px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--muted); }
+.board-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.board-search input { border: 0; height: 34px; padding: 0; background: transparent; }
+.board-search input:focus { box-shadow: none; }
+.board-toolbar .btn[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
+.archived { margin-bottom: 14px; padding: 14px 16px; }
+.archived-list { display: flex; flex-direction: column; gap: 6px; }
+.archived-list li { display: flex; gap: 10px; align-items: baseline; }

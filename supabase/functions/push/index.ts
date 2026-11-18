@@ -23,17 +23,22 @@ Deno.serve(async (req) => {
     url: string
     tag: string
   }
+  const targets = subscriptions.filter((s) => PUSH_HOSTS.some((h) => h.test(new URL(s.endpoint).hostname)))
   const results = await Promise.allSettled(
-    subscriptions
-      .filter((s) => PUSH_HOSTS.some((h) => h.test(new URL(s.endpoint).hostname)))
-      .map((s) =>
-        webpush.sendNotification(
-          { endpoint: s.endpoint, keys: s.keys },
-          JSON.stringify({ title: s.title, body, url, tag }),
-          { TTL: 60 * 60 * 24 },
-        ),
+    targets.map((s) =>
+      webpush.sendNotification(
+        { endpoint: s.endpoint, keys: s.keys },
+        JSON.stringify({ title: s.title, body, url, tag }),
+        { TTL: 60 * 60 * 24 },
       ),
+    ),
   )
-  // shortcut: expired subscriptions (410) are not deleted, they just fail quietly. Prune them if the list grows.
-  return Response.json({ sent: results.filter((r) => r.status === 'fulfilled').length })
+  // 404/410 mean the browser dropped the subscription; the database's prune job deletes these.
+  const gone = targets
+    .filter((_, i) => {
+      const r = results[i]
+      return r.status === 'rejected' && [404, 410].includes((r.reason as { statusCode?: number }).statusCode ?? 0)
+    })
+    .map((s) => s.endpoint)
+  return Response.json({ sent: results.filter((r) => r.status === 'fulfilled').length, gone })
 })

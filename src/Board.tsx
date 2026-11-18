@@ -3,7 +3,7 @@ import { draggable, dropTargetForElements, monitorForElements } from '@atlaskit/
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine'
 import { announce } from '@atlaskit/pragmatic-drag-and-drop-live-region'
 import { generateKeyBetween } from 'fractional-indexing'
-import { formatTime, supabase, upsert, type Card, type ChecklistItem, type Comment, type List, type Member, type Workspace } from './supabase'
+import { formatTime, supabase, upsert, type Card, type ChecklistItem, type Comment, type List, type Member, type Message, type Workspace } from './supabase'
 import { Modal } from './Modal'
 import { ImagePicker, StoredImage, removeIfUnused, uploadImage } from './Images'
 import { Avatar, Icon } from './Icon'
@@ -29,10 +29,18 @@ const edgeOf = (el: Element, x: number, y: number, horizontal: boolean): Edge =>
   return (horizontal ? x > r.left + r.width / 2 : y > r.top + r.height / 2) ? 'after' : 'before'
 }
 
-export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
+export function Board({ ws, me, members, openCard, onOpenCard }: {
+  ws: Workspace
+  me: string
+  members: Member[]
+  openCard: string | null
+  onOpenCard: (id: string | null) => void
+}) {
   const [lists, setLists] = useState<List[]>([])
   const [cards, setCards] = useState<Card[]>([])
-  const [openCard, setOpenCard] = useState<string | null>(null)
+  const [filter, setFilter] = useState<'all' | 'mine' | 'overdue'>('all')
+  const [search, setSearch] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
   const [newList, setNewList] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
@@ -68,7 +76,14 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
   }, [ws.id])
 
   const sortedLists = [...lists].sort(byPosition)
-  const cardsIn = (listId: string) => cards.filter((c) => c.list_id === listId).sort(byPosition)
+  // Archived cards leave the columns entirely, so positions and keyboard moves only consider active cards.
+  const cardsIn = (listId: string) => cards.filter((c) => c.list_id === listId && !c.archived_at).sort(byPosition)
+  const today = new Date().toISOString().slice(0, 10)
+  const term = search.trim().toLowerCase()
+  const visible = (c: Card) =>
+    (filter === 'all' || (filter === 'mine' ? c.assignee_id === me : !!c.due_date && c.due_date < today)) &&
+    (!term || c.title.toLowerCase().includes(term) || c.description.toLowerCase().includes(term))
+  const archived = cards.filter((c) => c.archived_at).sort((a, b) => b.archived_at!.localeCompare(a.archived_at!))
 
   // reload: the change was applied optimistically, so resync on failure.
   const save = async (op: PromiseLike<{ error: { message: string } | null }>, reload = false) => {
@@ -155,7 +170,7 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
 
   const deleteColumn = (list: List) => {
     if (!confirm(`Delete column "${list.title}" and all its cards?`)) return
-    const images = cardsIn(list.id).flatMap((c) => c.image_paths)
+    const images = cards.filter((c) => c.list_id === list.id).flatMap((c) => c.image_paths)
     setLists((p) => p.filter((l) => l.id !== list.id))
     void save(supabase.from('lists').delete().eq('id', list.id), true).then(() => removeIfUnused(images))
   }
@@ -180,12 +195,45 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
           </form>
         </div>
       ) : (
+        <>
+        <div className="board-toolbar">
+          <div className="segmented" role="group" aria-label="Filter cards">
+            {(['all', 'mine', 'overdue'] as const).map((f) => (
+              <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
+                {f === 'all' ? 'All' : f === 'mine' ? 'My cards' : 'Overdue'}
+              </button>
+            ))}
+          </div>
+          <label className="board-search">
+            <Icon name="search" />
+            <input type="search" aria-label="Search cards" placeholder="Search cards" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </label>
+          <button className="btn ghost small" aria-pressed={showArchived} onClick={() => setShowArchived(!showArchived)}>
+            <Icon name="archive" /> Archived ({archived.length})
+          </button>
+        </div>
+        {showArchived && (
+          <div className="archived panel">
+            {archived.length === 0 ? (
+              <p className="muted small">No archived cards.</p>
+            ) : (
+              <ul className="plain archived-list">
+                {archived.map((c) => (
+                  <li key={c.id}>
+                    <button className="link" onClick={() => onOpenCard(c.id)}>{c.title}</button>
+                    <span className="muted small">{lists.find((l) => l.id === c.list_id)?.title}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <div className="lists">
           {sortedLists.map((list, i) => (
             <ListColumn
               key={list.id}
               list={list}
-              cards={cardsIn(list.id)}
+              cards={cardsIn(list.id).filter(visible)}
               names={names}
               canLeft={i > 0}
               canRight={i < sortedLists.length - 1}
@@ -193,7 +241,7 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
               onRename={(title) => save(supabase.from('lists').update({ title }).eq('id', list.id))}
               onDelete={() => deleteColumn(list)}
               onAddCard={(title) => addCard(list.id, title)}
-              onOpenCard={setOpenCard}
+              onOpenCard={onOpenCard}
             />
           ))}
           <form className="add-list" onSubmit={addList}>
@@ -201,6 +249,7 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
             <button className="btn primary"><Icon name="plus" /> Add column</button>
           </form>
         </div>
+        </>
       )}
       {card && (
         <CardEditor
@@ -212,11 +261,12 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
           members={members}
           names={names}
           onMove={moveCard}
-          onClose={() => setOpenCard(null)}
+          me={me}
+          onClose={() => onOpenCard(null)}
           onSaved={(c) => setCards((p) => upsert(p, c))}
           onDeleted={() => {
             setCards((p) => p.filter((c) => c.id !== card.id))
-            setOpenCard(null)
+            onOpenCard(null)
             void removeIfUnused(card.image_paths)
           }}
         />
@@ -361,8 +411,9 @@ function CardItem({ card, assignee, onOpen }: { card: Card; assignee?: string; o
   )
 }
 
-function CardEditor({ card, lists, index, count, members, names, onMove, onClose, onSaved, onDeleted }: {
+function CardEditor({ card, me, lists, index, count, members, names, onMove, onClose, onSaved, onDeleted }: {
   card: Card
+  me: string
   lists: List[]
   index: number
   count: number
@@ -383,7 +434,7 @@ function CardEditor({ card, lists, index, count, members, names, onMove, onClose
   const [newItem, setNewItem] = useState('')
   const [comments, setComments] = useState<Comment[]>([])
   const [comment, setComment] = useState('')
-  const [me, setMe] = useState('')
+  const [shared, setShared] = useState<Pick<Message, 'id' | 'user_id' | 'created_at'>[]>([])
 
   useEffect(() => {
     if (card.source_message_id)
@@ -392,11 +443,23 @@ function CardEditor({ card, lists, index, count, members, names, onMove, onClose
 
   useEffect(() => {
     supabase.from('card_comments').select('*').eq('card_id', card.id).order('created_at').then(({ data }) => setComments((data ?? []) as Comment[]))
-    supabase.auth.getUser().then(({ data }) => setMe(data.user?.id ?? ''))
+    loadShared()
   }, [card.id])
 
+  function loadShared() {
+    supabase.from('messages').select('id, user_id, created_at').eq('card_id', card.id).order('created_at', { ascending: false }).limit(5)
+      .then(({ data }) => setShared((data ?? []) as Pick<Message, 'id' | 'user_id' | 'created_at'>[]))
+  }
+
+  const shareToChat = async () => {
+    const { error } = await supabase.from('messages').insert({ workspace_id: card.workspace_id, body: '', card_id: card.id })
+    if (error) return setError(error.message)
+    setError('Shared to chat.')
+    loadShared()
+  }
+
   // Images, checklist and comments save immediately; the form's Save button covers the text fields.
-  const patch = async (fields: Partial<Pick<Card, 'image_paths' | 'checklist'>>) => {
+  const patch = async (fields: Partial<Pick<Card, 'image_paths' | 'checklist' | 'archived_at'>>) => {
     const { data, error } = await supabase.from('cards').update(fields).eq('id', card.id).select().single()
     if (error) return setError(error.message)
     onSaved(data as Card)
@@ -559,7 +622,18 @@ function CardEditor({ card, lists, index, count, members, names, onMove, onClose
           </form>
         </section>
 
-        <section className="stack section">
+        {shared.length > 0 && (
+          <section className="stack section">
+            <h3>Shared in chat</h3>
+            <ul className="plain stack small">
+              {shared.map((s) => (
+                <li key={s.id} className="muted">{names.get(s.user_id) ?? 'Former member'} shared it {formatTime(s.created_at)}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {!card.archived_at && <section className="stack section">
           <h3>Move</h3>
           <div className="input-row">
             <select aria-label="Column" value={card.list_id} onChange={(e) => onMove(card.id, e.target.value, Number.MAX_SAFE_INTEGER)}>
@@ -574,11 +648,17 @@ function CardEditor({ card, lists, index, count, members, names, onMove, onClose
               <Icon name="down" /><span className="visually-hidden">Move down</span>
             </button>
           </div>
-        </section>
+        </section>}
 
         <div className="dialog-foot">
-          <button type="button" className="btn danger ghost" onClick={remove}><Icon name="trash" /> Delete card</button>
-          <button className="btn primary" form="card-form">Save</button>
+          <button type="button" className="btn danger ghost" onClick={remove}><Icon name="trash" /> <span className="hide-sm">Delete</span></button>
+          <span className="row">
+            <button type="button" className="btn ghost" onClick={() => patch({ archived_at: card.archived_at ? null : new Date().toISOString() })}>
+              <Icon name="archive" /> {card.archived_at ? 'Restore' : 'Archive'}
+            </button>
+            <button type="button" className="btn ghost" onClick={shareToChat}><Icon name="share" /> <span className="hide-sm">Share to chat</span></button>
+            <button className="btn primary" form="card-form">Save</button>
+          </span>
         </div>
       </div>
     </Modal>

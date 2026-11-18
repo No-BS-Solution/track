@@ -23,6 +23,7 @@ export type Member = {
   user_id: string
   role: 'owner' | 'member'
   last_read_at: string
+  notify: 'all' | 'mentions' | 'none'
   profiles: { display_name: string } | null
 }
 export type Message = {
@@ -33,7 +34,12 @@ export type Message = {
   created_at: string
   edited_at: string | null
   image_path: string | null
+  reply_to: string | null
+  card_id: string | null
 }
+// Must match the check constraint on message_reactions.emoji.
+export const EMOJIS = ['👍', '❤️', '😂', '🎉', '👀', '✅'] as const
+export type Reaction = { message_id: string; user_id: string; emoji: string }
 export type List = { id: string; workspace_id: string; title: string; position: string }
 export type ChecklistItem = { text: string; done: boolean }
 export type Card = {
@@ -48,6 +54,7 @@ export type Card = {
   source_message_id: string | null
   image_paths: string[]
   checklist: ChecklistItem[]
+  archived_at: string | null
   updated_at: string
 }
 export type Comment = { id: string; card_id: string; user_id: string; body: string; created_at: string }

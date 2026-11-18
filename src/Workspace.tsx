@@ -7,6 +7,7 @@ import { useInstall } from './install'
 import { enableNotifications } from './push'
 import { removeAllUnused, removeFolder } from './Images'
 import { Avatar, Icon, Logo } from './Icon'
+import { usePresence } from './presence'
 
 type Usage = { db_bytes: number; file_bytes: number }
 const percent = (u: Usage) => ({
@@ -21,13 +22,15 @@ export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: st
   const [usage, setUsage] = useState<Usage | null>(null)
   const [tab, setTab] = useState<'chat' | 'board'>('chat')
   const [settings, setSettings] = useState(false)
+  const [openCard, setOpenCard] = useState<string | null>(null)
+  const presence = usePresence(workspaceId, me)
   const [notify, setNotify] = useState(typeof Notification === 'undefined' ? 'denied' : Notification.permission)
   const install = useInstall()
 
   const load = useCallback(async () => {
     const [w, m, u] = await Promise.all([
       supabase.from('workspaces').select('id, name, invite_code, created_at').eq('id', workspaceId).maybeSingle(),
-      supabase.from('workspace_members').select('user_id, role, last_read_at, profiles(display_name)').eq('workspace_id', workspaceId),
+      supabase.from('workspace_members').select('user_id, role, last_read_at, notify, profiles(display_name)').eq('workspace_id', workspaceId),
       supabase.rpc('storage_usage'),
     ])
     setWs(w.data as Workspace | null)
@@ -61,6 +64,7 @@ export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: st
           <span className="divider" aria-hidden="true" />
           <Avatar name={ws.name} id={ws.id} size={28} />
           <h1>{ws.name}</h1>
+          <span className="online-count hide-sm" title="Online now">{presence.online.size} online</span>
         </span>
         <span className="topbar-actions">
           {install && (
@@ -94,21 +98,23 @@ export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: st
         <button aria-pressed={tab === 'board'} onClick={() => setTab('board')}><Icon name="board" /> Board</button>
       </nav>
       <div className={`panes show-${tab}`}>
-        <Chat ws={ws} me={me} names={names} />
-        <Board ws={ws} members={members} />
+        <Chat ws={ws} me={me} names={names} typing={presence.typing} setTyping={presence.setTyping}
+          onOpenCard={(id) => { setOpenCard(id); setTab('board') }} />
+        <Board ws={ws} me={me} members={members} openCard={openCard} onOpenCard={setOpenCard} />
       </div>
       {settings && (
-        <Settings ws={ws} me={me} isOwner={isOwner} members={members} usage={usage} onClose={() => setSettings(false)} onChange={load} />
+        <Settings ws={ws} me={me} isOwner={isOwner} members={members} online={presence.online} usage={usage} onClose={() => setSettings(false)} onChange={load} />
       )}
     </div>
   )
 }
 
-function Settings({ ws, me, isOwner, members, usage, onClose, onChange }: {
+function Settings({ ws, me, isOwner, members, online, usage, onClose, onChange }: {
   ws: Workspace
   me: string
   isOwner: boolean
   members: Member[]
+  online: Set<string>
   usage: Usage | null
   onClose: () => void
   onChange: () => Promise<void>
@@ -120,6 +126,8 @@ function Settings({ ws, me, isOwner, members, usage, onClose, onChange }: {
   const [days, setDays] = useState(180)
   const [busy, setBusy] = useState(false)
   const link = `${appUrl}#/join/${ws.invite_code}`
+  const myNotify = members.find((m) => m.user_id === me)?.notify ?? 'all'
+  const owners = members.filter((m) => m.role === 'owner').length
 
   const run = async (op: PromiseLike<{ error: { message: string } | null }>, after?: () => void) => {
     const { error } = await op
@@ -186,20 +194,39 @@ function Settings({ ws, me, isOwner, members, usage, onClose, onChange }: {
           <ul className="plain member-list">
             {members.map((m) => (
               <li key={m.user_id}>
-                <Avatar name={m.profiles?.display_name ?? '?'} id={m.user_id} />
+                <span className={`presence ${online.has(m.user_id) ? 'on' : ''}`} title={online.has(m.user_id) ? 'Online' : 'Offline'}>
+                  <Avatar name={m.profiles?.display_name ?? '?'} id={m.user_id} />
+                </span>
                 <span className="grow">
                   {m.profiles?.display_name ?? 'Unknown'}
                   {m.user_id === me && <span className="muted"> (you)</span>}
                 </span>
                 {m.role === 'owner' && <span className="pill">Owner</span>}
-                {isOwner && m.role === 'member' && (
-                  <button className="btn ghost small" onClick={() => confirm('Remove this member?') && run(supabase.from('workspace_members').delete().eq('workspace_id', ws.id).eq('user_id', m.user_id))}>
-                    Remove
-                  </button>
+                {isOwner && m.user_id !== me && (
+                  <>
+                    <button className="btn ghost small" onClick={() => run(supabase.rpc('set_member_role', { ws: ws.id, member: m.user_id, new_role: m.role === 'owner' ? 'member' : 'owner' }))}>
+                      {m.role === 'owner' ? 'Make member' : 'Make owner'}
+                    </button>
+                    <button className="btn ghost small danger" onClick={() => confirm('Remove this person from the workspace?') && run(supabase.from('workspace_members').delete().eq('workspace_id', ws.id).eq('user_id', m.user_id))}>
+                      Remove
+                    </button>
+                  </>
                 )}
               </li>
             ))}
           </ul>
+        </section>
+
+        <section className="stack">
+          <h3>Notifications</h3>
+          <label className="field">
+            <span>Notify me about</span>
+            <select value={myNotify} onChange={(e) => void run(supabase.from('workspace_members').update({ notify: e.target.value }).eq('workspace_id', ws.id).eq('user_id', me))}>
+              <option value="all">All new messages</option>
+              <option value="mentions">Only @mentions</option>
+              <option value="none">Nothing (muted)</option>
+            </select>
+          </label>
         </section>
 
         {isOwner && (
@@ -238,8 +265,13 @@ function Settings({ ws, me, isOwner, members, usage, onClose, onChange }: {
           </section>
         )}
 
-        <section className="stack danger-zone">
-          {isOwner ? (
+        <section className="row danger-zone">
+          {(!isOwner || owners > 1) && (
+            <button className="btn danger" onClick={() => confirm('Leave this workspace?') && run(supabase.from('workspace_members').delete().eq('workspace_id', ws.id).eq('user_id', me), leaveTo)}>
+              <Icon name="logout" /> Leave workspace
+            </button>
+          )}
+          {isOwner && (
             <button className="btn danger" onClick={async () => {
               if (!confirm(`Delete "${ws.name}" with all messages, cards and images? This cannot be undone.`)) return
               await removeFolder(ws.id).catch(() => {})
@@ -247,12 +279,11 @@ function Settings({ ws, me, isOwner, members, usage, onClose, onChange }: {
             }}>
               <Icon name="trash" /> Delete workspace
             </button>
-          ) : (
-            <button className="btn danger" onClick={() => confirm('Leave this workspace?') && run(supabase.from('workspace_members').delete().eq('workspace_id', ws.id).eq('user_id', me), leaveTo)}>
-              <Icon name="logout" /> Leave workspace
-            </button>
           )}
         </section>
+        {isOwner && owners === 1 && (
+          <p className="muted small">You're the only owner. Make someone else an owner to be able to leave.</p>
+        )}
       </div>
     </Modal>
   )
