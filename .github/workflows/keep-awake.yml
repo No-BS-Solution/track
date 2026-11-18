@@ -17,4 +17,5 @@ jobs:
         env:
           URL: ${{ secrets.VITE_SUPABASE_URL }}
           KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        run: curl --fail --silent --show-error -o /dev/null "$URL/rest/v1/workspaces?select=id&limit=1" -H "apikey: $KEY"
+        run: |
+          curl --fail --silent --show-error -o /dev/null "$URL/rest/v1/workspaces?select=id&limit=1" -H "apikey: $KEY"
