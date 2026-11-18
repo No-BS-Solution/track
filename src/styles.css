@@ -139,3 +139,17 @@ blockquote { margin: 0; padding-left: 10px; border-left: 3px solid var(--border)
   .panes.show-chat .board, .panes.show-board .chat { display: none; }
   .chat { border-right: 0; }
 }
+
+/* Images */
+.button {
+  display: inline-flex; align-items: center; cursor: pointer; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+}
+.button:hover { background: var(--surface-2); }
+.button:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.button.disabled { opacity: 0.5; cursor: default; }
+.image-link { display: inline-block; margin-top: 4px; }
+.image-link img { display: block; max-width: min(100%, 320px); max-height: 240px; border-radius: var(--radius); border: 1px solid var(--border); }
+.image-placeholder { display: inline-block; margin-top: 4px; }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--gap); }
+.image-grid img { max-width: 100%; max-height: 160px; }.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

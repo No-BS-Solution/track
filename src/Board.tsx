@@ -5,6 +5,7 @@ import { announce } from '@atlaskit/pragmatic-drag-and-drop-live-region'
 import { generateKeyBetween } from 'fractional-indexing'
 import { supabase, upsert, type Card, type List, type Member, type Workspace } from './supabase'
 import { Modal } from './Modal'
+import { ImagePicker, StoredImage, uploadImage } from './Images'
 
 // Fractional index keys sort by plain code-unit order, not locale order. Id breaks ties from concurrent inserts.
 export const byPosition = (a: { position: string; id: string }, b: { position: string; id: string }) =>
@@ -317,11 +318,12 @@ function CardItem({ card, assignee, onOpen }: { card: Card; assignee?: string; o
     <li ref={ref} className={`card ${dragging ? 'dragging' : ''} ${edge ? `drop-${edge}` : ''}`}>
       <button className="card-btn" onClick={onOpen}>
         <span className="card-title">{card.title}</span>
-        {(card.due_date || assignee || card.source_message_id) && (
+        {(card.due_date || assignee || card.source_message_id || card.image_paths.length > 0) && (
           <span className="card-meta row">
             {card.due_date && <span className={overdue ? 'overdue' : ''}>Due {card.due_date}</span>}
             {assignee && <span>{assignee}</span>}
             {card.source_message_id && <span>From chat</span>}
+            {card.image_paths.length > 0 && <span>{card.image_paths.length === 1 ? '1 image' : `${card.image_paths.length} images`}</span>}
           </span>
         )}
       </button>
@@ -346,6 +348,23 @@ function CardEditor({ card, lists, index, count, members, onMove, onClose, onSav
   const [due, setDue] = useState(card.due_date ?? '')
   const [source, setSource] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [uploading, setUploading] = useState(false)
+
+  const setImages = async (image_paths: string[]) => {
+    const { data, error } = await supabase.from('cards').update({ image_paths }).eq('id', card.id).select().single()
+    if (error) return setError(error.message)
+    onSaved(data as Card)
+  }
+
+  const addImage = async (file: File) => {
+    setUploading(true)
+    try {
+      await setImages([...card.image_paths, await uploadImage(card.workspace_id, file)])
+    } catch (err) {
+      setError((err as Error).message)
+    }
+    setUploading(false)
+  }
 
   useEffect(() => {
     if (card.source_message_id)
@@ -400,6 +419,20 @@ function CardEditor({ card, lists, index, count, members, onMove, onClose, onSav
         {source !== null && (
           <blockquote className="muted">From chat: {source}</blockquote>
         )}
+        <fieldset className="stack">
+          <legend>Images (saved immediately)</legend>
+          {card.image_paths.length > 0 && (
+            <div className="image-grid">
+              {card.image_paths.map((p, i) => (
+                <div key={p} className="stack">
+                  <StoredImage path={p} alt={`Card image ${i + 1}`} />
+                  <button type="button" onClick={() => setImages(card.image_paths.filter((x) => x !== p))}>Remove</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <ImagePicker label={uploading ? 'Uploading...' : 'Add image'} disabled={uploading || card.image_paths.length >= 20} onPick={addImage} />
+        </fieldset>
         <fieldset className="row">
           <legend>Move (saved immediately)</legend>
           <select aria-label="Column" value={card.list_id} onChange={(e) => onMove(card.id, e.target.value, Number.MAX_SAFE_INTEGER)}>

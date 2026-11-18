@@ -2,12 +2,14 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { generateKeyBetween } from 'fractional-indexing'
 import { supabase, upsert, type Card, type List, type Message, type Workspace } from './supabase'
 import { byPosition } from './Board'
+import { ImagePicker, StoredImage, uploadImage } from './Images'
 
 export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<string, string> }) {
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null)
   const [error, setError] = useState('')
+  const [uploading, setUploading] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
   const namesRef = useRef(names)
@@ -21,7 +23,7 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
         setMessages((prev) => upsert(prev, msg))
         if (msg.user_id !== me && document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
           const title = `${namesRef.current.get(msg.user_id) ?? 'Someone'} in ${ws.name}`
-          const options = { body: msg.body.slice(0, 200), tag: ws.id }
+          const options = { body: msg.body.slice(0, 200) || 'Sent an image', tag: ws.id }
           // Android Chrome only allows notifications through the service worker; `new Notification` throws there.
           void navigator.serviceWorker
             ?.getRegistration()
@@ -68,15 +70,30 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
     if (atBottom.current) scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
   }, [messages])
 
-  const send = async (e?: FormEvent) => {
-    e?.preventDefault()
+  const post = async (imagePath: string | null) => {
     const body = draft.trim()
-    if (!body) return
-    const { data, error } = await supabase.from('messages').insert({ workspace_id: ws.id, body }).select().single()
+    if (!body && !imagePath) return
+    const { data, error } = await supabase.from('messages').insert({ workspace_id: ws.id, body, image_path: imagePath }).select().single()
     if (error) return setError(error.message)
     atBottom.current = true
     setDraft('')
     setMessages((prev) => upsert(prev, data as Message))
+  }
+
+  const send = (e?: FormEvent) => {
+    e?.preventDefault()
+    void post(null)
+  }
+
+  // The current draft goes along as the image caption.
+  const sendImage = async (file: File) => {
+    setUploading(true)
+    try {
+      await post(await uploadImage(ws.id, file))
+    } catch (err) {
+      setError((err as Error).message)
+    }
+    setUploading(false)
   }
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -109,7 +126,8 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
     const { error } = await supabase.from('cards').insert({
       list_id: first.id,
       workspace_id: ws.id,
-      title: m.body.slice(0, 200),
+      title: m.body.slice(0, 200) || 'Image',
+      image_paths: m.image_path ? [m.image_path] : [],
       position: generateKeyBetween(last, null),
       source_message_id: m.id,
     })
@@ -149,13 +167,14 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
               <div className="stack">
                 <textarea aria-label="Edit message" maxLength={4000} value={editing.body} onChange={(e) => setEditing({ ...editing, body: e.target.value })} />
                 <span className="row">
-                  <button className="primary" onClick={saveEdit} disabled={!editing.body.trim()}>Save</button>
+                  <button className="primary" onClick={saveEdit} disabled={!editing.body.trim() && !m.image_path}>Save</button>
                   <button onClick={() => setEditing(null)}>Cancel</button>
                 </span>
               </div>
             ) : (
-              <p className="body">{m.body}</p>
+              m.body && <p className="body">{m.body}</p>
             )}
+            {m.image_path && <StoredImage path={m.image_path} alt={`Image from ${names.get(m.user_id) ?? 'a former member'}`} />}
           </article>
         ))}
       </div>
@@ -170,6 +189,7 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKey}
         />
+        <ImagePicker label={uploading ? 'Uploading...' : 'Image'} disabled={uploading} onPick={sendImage} />
         <button className="primary" disabled={!draft.trim()}>Send</button>
       </form>
     </section>

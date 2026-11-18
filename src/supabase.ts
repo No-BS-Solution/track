@@ -22,6 +22,7 @@ export type Message = {
   body: string
   created_at: string
   edited_at: string | null
+  image_path: string | null
 }
 export type List = { id: string; workspace_id: string; title: string; position: string }
 export type Card = {
@@ -34,6 +35,7 @@ export type Card = {
   due_date: string | null
   position: string
   source_message_id: string | null
+  image_paths: string[]
   updated_at: string
 }
 

@@ -2,7 +2,7 @@
 -- Simulates attackers calling the API directly with the anon key or their own session.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(33);
+select plan(37);
 
 insert into auth.users (id, email) values
   ('11111111-1111-1111-1111-111111111111', 'alice@example.com'),
@@ -26,6 +26,10 @@ insert into public.cards (id, list_id, workspace_id, title, position) values
 with m as (insert into public.messages (workspace_id, body) values (current_setting('t.ws')::uuid, 'hello') returning id)
 select set_config('t.m1', id::text, true) from m;
 
+select throws_ok($$ insert into public.messages (workspace_id, body) values (current_setting('t.ws')::uuid, '') $$,
+  '23514', null, 'empty message without image rejected');
+select lives_ok($$ insert into storage.objects (bucket_id, name) values ('images', current_setting('t.ws') || '/a.png') $$,
+  'member can upload to own workspace folder');
 select matches(current_setting('t.code'), '^[0-9a-f]{12}$', 'invite code is 12 hex chars');
 select is((select role from public.workspace_members where workspace_id = current_setting('t.ws')::uuid
   and user_id = auth.uid()), 'owner', 'creator is owner');
@@ -51,6 +55,9 @@ select is((select count(*) from public.cards), 0::bigint, 'non-member sees no ca
 select is((select count(*) from public.profiles), 1::bigint, 'non-member sees only own profile');
 select throws_ok($$ insert into public.messages (workspace_id, body) values (current_setting('t.ws')::uuid, 'hi') $$,
   '42501', null, 'non-member cannot post');
+select is((select count(*) from storage.objects where bucket_id = 'images'), 0::bigint, 'non-member sees no images');
+select throws_ok($$ insert into storage.objects (bucket_id, name) values ('images', current_setting('t.ws') || '/evil.png') $$,
+  '42501', null, 'non-member cannot upload to workspace folder');
 select throws_ok($$ select public.join_workspace('000000000000') $$, 'P0001', 'invalid invite code', 'bad invite code rejected');
 update public.cards set title = 'pwned';
 delete from public.lists;
