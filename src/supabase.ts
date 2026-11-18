@@ -6,7 +6,17 @@ export const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.m
   auth: { flowType: 'pkce' },
 })
 
+// Registered right after createClient so it sees the event fired while the reset link's code is exchanged.
+export let passwordRecovery = false
+supabase.auth.onAuthStateChange((event) => {
+  if (event === 'PASSWORD_RECOVERY') passwordRecovery = true
+})
+export const endPasswordRecovery = () => (passwordRecovery = false)
+
 export const appUrl = location.origin + import.meta.env.BASE_URL
+
+// Supabase free plan limits, used for the "almost full" warning. Raise these after upgrading.
+export const LIMITS = { dbBytes: 500 * 1024 ** 2, fileBytes: 1024 ** 3 }
 
 export type Workspace = { id: string; name: string; invite_code: string; created_at: string }
 export type Member = {
@@ -25,6 +35,7 @@ export type Message = {
   image_path: string | null
 }
 export type List = { id: string; workspace_id: string; title: string; position: string }
+export type ChecklistItem = { text: string; done: boolean }
 export type Card = {
   id: string
   list_id: string
@@ -36,9 +47,13 @@ export type Card = {
   position: string
   source_message_id: string | null
   image_paths: string[]
+  checklist: ChecklistItem[]
   updated_at: string
 }
+export type Comment = { id: string; card_id: string; user_id: string; body: string; created_at: string }
 
 export function upsert<T extends { id: string }>(rows: T[], row: T): T[] {
   return rows.some((r) => r.id === row.id) ? rows.map((r) => (r.id === row.id ? row : r)) : [...rows, row]
 }
+
+export const formatTime = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })

@@ -1,0 +1,20 @@
+name: Keep Supabase awake
+
+# Supabase pauses free projects after about a week without activity. One read-only request
+# with the public anon key twice a week counts as activity. Returns nothing because of RLS.
+on:
+  schedule:
+    - cron: '23 6 * * 1,4'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the API
+        env:
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: curl --fail --silent --show-error -o /dev/null "$URL/rest/v1/workspaces?select=id&limit=1" -H "apikey: $KEY"

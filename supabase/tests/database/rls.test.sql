@@ -2,7 +2,7 @@
 -- Simulates attackers calling the API directly with the anon key or their own session.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(37);
+select plan(44);
 
 insert into auth.users (id, email) values
   ('11111111-1111-1111-1111-111111111111', 'alice@example.com'),
@@ -85,11 +85,19 @@ update public.messages set body = 'mine!' where id = current_setting('t.m2')::uu
 select isnt((select edited_at from public.messages where id = current_setting('t.m2')::uuid), null, 'author edit sets edited_at');
 update public.cards set title = 'Bob card';
 select is((select title from public.cards), 'Bob card', 'member can edit cards');
+select throws_ok($$ select public.regenerate_invite_code(current_setting('t.ws')::uuid) $$, 'P0001', null, 'member cannot rotate invite code');
+select throws_ok($$ select public.delete_history_before(current_setting('t.ws')::uuid, now()) $$, 'P0001', null, 'member cannot delete history');
+select lives_ok($$ insert into public.card_comments (card_id, workspace_id, body) values ('cccccccc-0000-0000-0000-000000000001', current_setting('t.ws')::uuid, 'hi') $$,
+  'member can comment on cards');
+select lives_ok($$ select public.save_push_subscription('https://fcm.googleapis.com/fcm/send/x', 'key', 'auth') $$, 'member saves push subscription');
 
 -- alice removes bob
 select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
 update public.workspaces set name = 'Renamed' where id = current_setting('t.ws')::uuid;
 select is((select name from public.workspaces where id = current_setting('t.ws')::uuid), 'Renamed', 'owner can rename');
+select is((select count(*) from public.push_subscriptions), 0::bigint, 'cannot see others push subscriptions');
+select isnt(public.regenerate_invite_code(current_setting('t.ws')::uuid), current_setting('t.code'), 'owner rotates invite code');
+select is(public.delete_history_before(current_setting('t.ws')::uuid, now() + interval '1 minute'), 2, 'owner deletes history');
 delete from public.workspace_members where user_id = '22222222-2222-2222-2222-222222222222';
 select is((select count(*) from public.workspace_members where workspace_id = current_setting('t.ws')::uuid), 1::bigint, 'owner can remove member');
 

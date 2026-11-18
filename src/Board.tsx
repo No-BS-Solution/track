@@ -3,9 +3,10 @@ import { draggable, dropTargetForElements, monitorForElements } from '@atlaskit/
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine'
 import { announce } from '@atlaskit/pragmatic-drag-and-drop-live-region'
 import { generateKeyBetween } from 'fractional-indexing'
-import { supabase, upsert, type Card, type List, type Member, type Workspace } from './supabase'
+import { formatTime, supabase, upsert, type Card, type ChecklistItem, type Comment, type List, type Member, type Workspace } from './supabase'
 import { Modal } from './Modal'
-import { ImagePicker, StoredImage, uploadImage } from './Images'
+import { ImagePicker, StoredImage, removeIfUnused, uploadImage } from './Images'
+import { Avatar, Icon } from './Icon'
 
 // Fractional index keys sort by plain code-unit order, not locale order. Id breaks ties from concurrent inserts.
 export const byPosition = (a: { position: string; id: string }, b: { position: string; id: string }) =>
@@ -152,40 +153,55 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
     setCards((p) => upsert(p, data as Card))
   }
 
+  const deleteColumn = (list: List) => {
+    if (!confirm(`Delete column "${list.title}" and all its cards?`)) return
+    const images = cardsIn(list.id).flatMap((c) => c.image_paths)
+    setLists((p) => p.filter((l) => l.id !== list.id))
+    void save(supabase.from('lists').delete().eq('id', list.id), true).then(() => removeIfUnused(images))
+  }
+
   const names = new Map(members.map((m) => [m.user_id, m.profiles?.display_name ?? 'Unknown']))
   const card = cards.find((c) => c.id === openCard)
 
   return (
     <section className="board" aria-label="Board">
-      {error && <p role="alert" className="notice" onClick={() => setError('')}>{error}</p>}
-      <div className="lists">
-        {sortedLists.map((list, i) => (
-          <ListColumn
-            key={list.id}
-            list={list}
-            cards={cardsIn(list.id)}
-            names={names}
-            canLeft={i > 0}
-            canRight={i < sortedLists.length - 1}
-            onMove={(dir) => moveList(list.id, i + dir)}
-            onRename={(title) => save(supabase.from('lists').update({ title }).eq('id', list.id))}
-            onDelete={() => {
-              if (!confirm(`Delete column "${list.title}" and all its cards?`)) return
-              setLists((p) => p.filter((l) => l.id !== list.id))
-              void save(supabase.from('lists').delete().eq('id', list.id), true)
-            }}
-            onAddCard={(title) => addCard(list.id, title)}
-            onOpenCard={setOpenCard}
-          />
-        ))}
-        <form className="add-list stack" onSubmit={addList}>
-          <input aria-label="New column name" placeholder="New column, e.g. QA" required maxLength={100} value={newList} onChange={(e) => setNewList(e.target.value)} />
-          <button className="primary">Add column</button>
-          {loaded && sortedLists.length === 0 && (
-            <button type="button" onClick={() => addColumns(starterColumns)}>Start with {starterColumns.join(', ')}</button>
-          )}
-        </form>
-      </div>
+      {error && <p role="alert" className="notice toast" onClick={() => setError('')}>{error}</p>}
+      {loaded && sortedLists.length === 0 ? (
+        <div className="empty board-empty">
+          <Icon name="board" />
+          <h2>Set up your board</h2>
+          <p className="muted">Columns are the stages your work moves through.</p>
+          <button className="btn primary" onClick={() => addColumns(starterColumns)}>
+            Start with {starterColumns.join(', ')}
+          </button>
+          <form className="input-row" onSubmit={addList}>
+            <input aria-label="New column name" placeholder="Or name your own column" required maxLength={100} value={newList} onChange={(e) => setNewList(e.target.value)} />
+            <button className="btn">Add column</button>
+          </form>
+        </div>
+      ) : (
+        <div className="lists">
+          {sortedLists.map((list, i) => (
+            <ListColumn
+              key={list.id}
+              list={list}
+              cards={cardsIn(list.id)}
+              names={names}
+              canLeft={i > 0}
+              canRight={i < sortedLists.length - 1}
+              onMove={(dir) => moveList(list.id, i + dir)}
+              onRename={(title) => save(supabase.from('lists').update({ title }).eq('id', list.id))}
+              onDelete={() => deleteColumn(list)}
+              onAddCard={(title) => addCard(list.id, title)}
+              onOpenCard={setOpenCard}
+            />
+          ))}
+          <form className="add-list" onSubmit={addList}>
+            <input aria-label="New column name" placeholder="New column, e.g. QA" required maxLength={100} value={newList} onChange={(e) => setNewList(e.target.value)} />
+            <button className="btn primary"><Icon name="plus" /> Add column</button>
+          </form>
+        </div>
+      )}
       {card && (
         <CardEditor
           key={card.id}
@@ -194,12 +210,14 @@ export function Board({ ws, members }: { ws: Workspace; members: Member[] }) {
           index={cardsIn(card.list_id).findIndex((c) => c.id === card.id)}
           count={cardsIn(card.list_id).length}
           members={members}
+          names={names}
           onMove={moveCard}
           onClose={() => setOpenCard(null)}
           onSaved={(c) => setCards((p) => upsert(p, c))}
           onDeleted={() => {
             setCards((p) => p.filter((c) => c.id !== card.id))
             setOpenCard(null)
+            void removeIfUnused(card.image_paths)
           }}
         />
       )}
@@ -262,25 +280,34 @@ function ListColumn({ list, cards, names, canLeft, canRight, onMove, onRename, o
 
   return (
     <div ref={ref} className={`list ${edge ? `drop-${edge}` : ''} ${cardOver ? 'card-over' : ''}`}>
-      <h3 className="list-head row">
-        <span ref={handle} className="grip" title="Drag to reorder" aria-hidden="true">::</span>
-        <input ref={titleInput} aria-label="Column name" maxLength={100} value={title} onChange={(e) => setTitle(e.target.value)} onBlur={rename}
+      <div className="list-head">
+        <span ref={handle} className="grip" title="Drag to reorder"><Icon name="grip" /></span>
+        <input ref={titleInput} className="list-title" aria-label="Column name" maxLength={100} value={title}
+          onChange={(e) => setTitle(e.target.value)} onBlur={rename}
           onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} />
-      </h3>
-      <div className="row list-tools">
-        <button aria-label={`Move column ${list.title} left`} disabled={!canLeft} onClick={() => onMove(-1)}>&lt;</button>
-        <button aria-label={`Move column ${list.title} right`} disabled={!canRight} onClick={() => onMove(1)}>&gt;</button>
-        <button aria-label={`Rename column ${list.title}`} onClick={() => titleInput.current?.select()}>Rename</button>
-        <button aria-label={`Delete column ${list.title}`} onClick={onDelete}>Delete</button>
+        <span className="count">{cards.length}</span>
+      </div>
+      <div className="list-tools">
+        <button className="btn ghost icon-btn small" title="Move left" disabled={!canLeft} onClick={() => onMove(-1)}>
+          <Icon name="left" /><span className="visually-hidden">Move column {list.title} left</span>
+        </button>
+        <button className="btn ghost icon-btn small" title="Move right" disabled={!canRight} onClick={() => onMove(1)}>
+          <Icon name="right" /><span className="visually-hidden">Move column {list.title} right</span>
+        </button>
+        <button className="btn ghost icon-btn small" title="Rename" onClick={() => titleInput.current?.select()}>
+          <Icon name="edit" /><span className="visually-hidden">Rename column {list.title}</span>
+        </button>
+        <button className="btn ghost icon-btn small" title="Delete column" onClick={onDelete}>
+          <Icon name="trash" /><span className="visually-hidden">Delete column {list.title}</span>
+        </button>
       </div>
       <ul className="plain cards">
         {cards.map((c) => (
           <CardItem key={c.id} card={c} assignee={c.assignee_id ? names.get(c.assignee_id) : undefined} onOpen={() => onOpenCard(c.id)} />
         ))}
       </ul>
-      <form className="row" onSubmit={add}>
-        <input aria-label={`New card in ${list.title}`} placeholder="Add a card" required maxLength={200} value={newCard} onChange={(e) => setNewCard(e.target.value)} />
-        <button>Add</button>
+      <form className="add-card" onSubmit={add}>
+        <input aria-label={`New card in ${list.title}`} placeholder="+ Add a card" required maxLength={200} value={newCard} onChange={(e) => setNewCard(e.target.value)} />
       </form>
     </div>
   )
@@ -314,29 +341,33 @@ function CardItem({ card, assignee, onOpen }: { card: Card; assignee?: string; o
   )
 
   const overdue = card.due_date && card.due_date < new Date().toISOString().slice(0, 10)
+  const done = card.checklist.filter((i) => i.done).length
   return (
     <li ref={ref} className={`card ${dragging ? 'dragging' : ''} ${edge ? `drop-${edge}` : ''}`}>
       <button className="card-btn" onClick={onOpen}>
+        {card.image_paths[0] && <StoredImage path={card.image_paths[0]} alt="" link={false} />}
         <span className="card-title">{card.title}</span>
-        {(card.due_date || assignee || card.source_message_id || card.image_paths.length > 0) && (
-          <span className="card-meta row">
-            {card.due_date && <span className={overdue ? 'overdue' : ''}>Due {card.due_date}</span>}
-            {assignee && <span>{assignee}</span>}
-            {card.source_message_id && <span>From chat</span>}
-            {card.image_paths.length > 0 && <span>{card.image_paths.length === 1 ? '1 image' : `${card.image_paths.length} images`}</span>}
-          </span>
-        )}
+        <span className="card-meta">
+          {card.due_date && <span className={`chip ${overdue ? 'overdue' : ''}`}><Icon name="calendar" />{card.due_date}</span>}
+          {card.checklist.length > 0 && (
+            <span className={`chip ${done === card.checklist.length ? 'complete' : ''}`}><Icon name="check" />{done}/{card.checklist.length}</span>
+          )}
+          {card.image_paths.length > 1 && <span className="chip"><Icon name="image" />{card.image_paths.length}</span>}
+          {card.source_message_id && <span className="chip"><Icon name="chat" />chat</span>}
+          {assignee && <span className="card-assignee" title={`Assigned to ${assignee}`}><Avatar name={assignee} id={card.assignee_id!} size={22} /></span>}
+        </span>
       </button>
     </li>
   )
 }
 
-function CardEditor({ card, lists, index, count, members, onMove, onClose, onSaved, onDeleted }: {
+function CardEditor({ card, lists, index, count, members, names, onMove, onClose, onSaved, onDeleted }: {
   card: Card
   lists: List[]
   index: number
   count: number
   members: Member[]
+  names: Map<string, string>
   onMove: (id: string, listId: string, index: number) => void
   onClose: () => void
   onSaved: (c: Card) => void
@@ -349,9 +380,24 @@ function CardEditor({ card, lists, index, count, members, onMove, onClose, onSav
   const [source, setSource] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [newItem, setNewItem] = useState('')
+  const [comments, setComments] = useState<Comment[]>([])
+  const [comment, setComment] = useState('')
+  const [me, setMe] = useState('')
 
-  const setImages = async (image_paths: string[]) => {
-    const { data, error } = await supabase.from('cards').update({ image_paths }).eq('id', card.id).select().single()
+  useEffect(() => {
+    if (card.source_message_id)
+      supabase.from('messages').select('body').eq('id', card.source_message_id).maybeSingle().then(({ data }) => setSource(data?.body ?? null))
+  }, [card.source_message_id])
+
+  useEffect(() => {
+    supabase.from('card_comments').select('*').eq('card_id', card.id).order('created_at').then(({ data }) => setComments((data ?? []) as Comment[]))
+    supabase.auth.getUser().then(({ data }) => setMe(data.user?.id ?? ''))
+  }, [card.id])
+
+  // Images, checklist and comments save immediately; the form's Save button covers the text fields.
+  const patch = async (fields: Partial<Pick<Card, 'image_paths' | 'checklist'>>) => {
+    const { data, error } = await supabase.from('cards').update(fields).eq('id', card.id).select().single()
     if (error) return setError(error.message)
     onSaved(data as Card)
   }
@@ -359,17 +405,43 @@ function CardEditor({ card, lists, index, count, members, onMove, onClose, onSav
   const addImage = async (file: File) => {
     setUploading(true)
     try {
-      await setImages([...card.image_paths, await uploadImage(card.workspace_id, file)])
+      await patch({ image_paths: [...card.image_paths, await uploadImage(card.workspace_id, file)] })
     } catch (err) {
       setError((err as Error).message)
     }
     setUploading(false)
   }
 
-  useEffect(() => {
-    if (card.source_message_id)
-      supabase.from('messages').select('body').eq('id', card.source_message_id).maybeSingle().then(({ data }) => setSource(data?.body ?? null))
-  }, [card.source_message_id])
+  const removeImage = async (path: string) => {
+    await patch({ image_paths: card.image_paths.filter((x) => x !== path) })
+    void removeIfUnused([path])
+  }
+
+  const setChecklist = (checklist: ChecklistItem[]) => void patch({ checklist })
+
+  const addItem = (e: FormEvent) => {
+    e.preventDefault()
+    if (newItem.trim()) setChecklist([...card.checklist, { text: newItem.trim().slice(0, 200), done: false }])
+    setNewItem('')
+  }
+
+  const addComment = async (e: FormEvent) => {
+    e.preventDefault()
+    const { data, error } = await supabase
+      .from('card_comments')
+      .insert({ card_id: card.id, workspace_id: card.workspace_id, body: comment.trim() })
+      .select()
+      .single()
+    if (error) return setError(error.message)
+    setComments((p) => [...p, data as Comment])
+    setComment('')
+  }
+
+  const deleteComment = async (id: string) => {
+    const { error } = await supabase.from('card_comments').delete().eq('id', id)
+    if (error) return setError(error.message)
+    setComments((p) => p.filter((c) => c.id !== id))
+  }
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -391,63 +463,124 @@ function CardEditor({ card, lists, index, count, members, onMove, onClose, onSav
     else onDeleted()
   }
 
+  const done = card.checklist.filter((i) => i.done).length
+
   return (
     <Modal title="Card" onClose={onClose}>
-      <form className="stack" onSubmit={submit}>
-        {error && <p role="alert" className="notice">{error}</p>}
-        <label>
-          Title
-          <input required maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} />
-        </label>
-        <label>
-          Description
-          <textarea rows={6} maxLength={10000} value={description} onChange={(e) => setDescription(e.target.value)} />
-        </label>
-        <label>
-          Assignee
-          <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
-            <option value="">Nobody</option>
-            {members.map((m) => (
-              <option key={m.user_id} value={m.user_id}>{m.profiles?.display_name ?? 'Unknown'}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Due date
-          <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
-        </label>
-        {source !== null && (
-          <blockquote className="muted">From chat: {source}</blockquote>
-        )}
-        <fieldset className="stack">
-          <legend>Images (saved immediately)</legend>
+      <div className="stack">
+        {error && <p role="alert" className="notice" onClick={() => setError('')}>{error}</p>}
+        <form id="card-form" className="stack" onSubmit={submit}>
+          <label className="field">
+            <span>Title</span>
+            <input required maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>Description</span>
+            <textarea rows={4} maxLength={10000} value={description} onChange={(e) => setDescription(e.target.value)} />
+          </label>
+          <div className="two-col tight">
+            <label className="field">
+              <span>Assignee</span>
+              <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+                <option value="">Nobody</option>
+                {members.map((m) => (
+                  <option key={m.user_id} value={m.user_id}>{m.profiles?.display_name ?? 'Unknown'}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Due date</span>
+              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+            </label>
+          </div>
+          {source !== null && <blockquote className="muted">From chat: {source}</blockquote>}
+        </form>
+
+        <section className="stack section">
+          <h3>Checklist {card.checklist.length > 0 && <span className="muted small">{done}/{card.checklist.length}</span>}</h3>
+          {card.checklist.length > 0 && (
+            <ul className="plain checklist">
+              {card.checklist.map((item, i) => (
+                <li key={i}>
+                  <label className="check">
+                    <input type="checkbox" checked={item.done}
+                      onChange={() => setChecklist(card.checklist.map((x, j) => (j === i ? { ...x, done: !x.done } : x)))} />
+                    <span className={item.done ? 'done' : ''}>{item.text}</span>
+                  </label>
+                  <button className="btn ghost icon-btn small" title="Remove item" onClick={() => setChecklist(card.checklist.filter((_, j) => j !== i))}>
+                    <Icon name="x" /><span className="visually-hidden">Remove {item.text}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <form className="input-row" onSubmit={addItem}>
+            <input aria-label="New checklist item" placeholder="Add an item" maxLength={200} value={newItem} onChange={(e) => setNewItem(e.target.value)} />
+            <button className="btn" disabled={card.checklist.length >= 100}>Add</button>
+          </form>
+        </section>
+
+        <section className="stack section">
+          <h3>Images</h3>
           {card.image_paths.length > 0 && (
             <div className="image-grid">
               {card.image_paths.map((p, i) => (
-                <div key={p} className="stack">
+                <div key={p} className="image-tile">
                   <StoredImage path={p} alt={`Card image ${i + 1}`} />
-                  <button type="button" onClick={() => setImages(card.image_paths.filter((x) => x !== p))}>Remove</button>
+                  <button className="btn ghost small" onClick={() => removeImage(p)}>Remove</button>
                 </div>
               ))}
             </div>
           )}
           <ImagePicker label={uploading ? 'Uploading...' : 'Add image'} disabled={uploading || card.image_paths.length >= 20} onPick={addImage} />
-        </fieldset>
-        <fieldset className="row">
-          <legend>Move (saved immediately)</legend>
-          <select aria-label="Column" value={card.list_id} onChange={(e) => onMove(card.id, e.target.value, Number.MAX_SAFE_INTEGER)}>
-            {lists.map((l) => (
-              <option key={l.id} value={l.id}>{l.title}</option>
-            ))}
-          </select>
-          <button type="button" disabled={index <= 0} onClick={() => onMove(card.id, card.list_id, index - 1)}>Up</button>
-          <button type="button" disabled={index >= count - 1} onClick={() => onMove(card.id, card.list_id, index + 1)}>Down</button>
-        </fieldset>
-        <div className="row spread">
-          <button type="button" className="danger" onClick={remove}>Delete card</button>
-          <button className="primary">Save</button>
+        </section>
+
+        <section className="stack section">
+          <h3>Comments</h3>
+          {comments.map((c) => {
+            const name = names.get(c.user_id) ?? 'Former member'
+            return (
+              <div key={c.id} className="comment">
+                <Avatar name={name} id={c.user_id} size={26} />
+                <div className="grow">
+                  <div className="message-head">
+                    <strong>{name}</strong>
+                    <time className="muted small" dateTime={c.created_at}>{formatTime(c.created_at)}</time>
+                    {c.user_id === me && <button className="link small" onClick={() => deleteComment(c.id)}>Delete</button>}
+                  </div>
+                  <p className="body">{c.body}</p>
+                </div>
+              </div>
+            )
+          })}
+          <form className="input-row" onSubmit={addComment}>
+            <input aria-label="New comment" placeholder="Write a comment" required maxLength={4000} value={comment} onChange={(e) => setComment(e.target.value)} />
+            <button className="btn">Post</button>
+          </form>
+        </section>
+
+        <section className="stack section">
+          <h3>Move</h3>
+          <div className="input-row">
+            <select aria-label="Column" value={card.list_id} onChange={(e) => onMove(card.id, e.target.value, Number.MAX_SAFE_INTEGER)}>
+              {lists.map((l) => (
+                <option key={l.id} value={l.id}>{l.title}</option>
+              ))}
+            </select>
+            <button className="btn ghost icon-btn" title="Move up" disabled={index <= 0} onClick={() => onMove(card.id, card.list_id, index - 1)}>
+              <Icon name="up" /><span className="visually-hidden">Move up</span>
+            </button>
+            <button className="btn ghost icon-btn" title="Move down" disabled={index >= count - 1} onClick={() => onMove(card.id, card.list_id, index + 1)}>
+              <Icon name="down" /><span className="visually-hidden">Move down</span>
+            </button>
+          </div>
+        </section>
+
+        <div className="dialog-foot">
+          <button type="button" className="btn danger ghost" onClick={remove}><Icon name="trash" /> Delete card</button>
+          <button className="btn primary" form="card-form">Save</button>
         </div>
-      </form>
+      </div>
     </Modal>
   )
 }

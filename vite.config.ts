@@ -40,6 +40,10 @@ export default defineConfig(({ mode }) => {
       },
       VitePWA({
         registerType: 'autoUpdate',
+        // Custom worker (src/sw.ts) so it can show push notifications and open the app when one is tapped.
+        strategies: 'injectManifest',
+        srcDir: 'src',
+        filename: 'sw.ts',
         includeAssets: ['favicon.svg'],
         manifest: {
           name: 'Track',
@@ -53,10 +57,8 @@ export default defineConfig(({ mode }) => {
             { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
           ],
         },
-        workbox: {
-          // Precache the static app shell only. No runtimeCaching, so Supabase API/auth traffic is never cached.
+        injectManifest: {
           globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
-          runtimeCaching: [],
         },
       }),
     ],

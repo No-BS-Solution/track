@@ -1,15 +1,22 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { generateKeyBetween } from 'fractional-indexing'
-import { supabase, upsert, type Card, type List, type Message, type Workspace } from './supabase'
+import { formatTime, supabase, upsert, type Card, type List, type Message, type Workspace } from './supabase'
 import { byPosition } from './Board'
-import { ImagePicker, StoredImage, uploadImage } from './Images'
+import { ImagePicker, StoredImage, removeIfUnused, uploadImage } from './Images'
+import { pushAvailable } from './push'
+import { Avatar, Icon } from './Icon'
+
+const PAGE = 100
 
 export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<string, string> }) {
   const [messages, setMessages] = useState<Message[]>([])
+  const [hasMore, setHasMore] = useState(false)
   const [draft, setDraft] = useState('')
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null)
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<Message[] | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
   const namesRef = useRef(names)
@@ -21,16 +28,15 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `workspace_id=eq.${ws.id}` }, ({ new: m }) => {
         const msg = m as Message
         setMessages((prev) => upsert(prev, msg))
-        if (msg.user_id !== me && document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        // With push set up the service worker notifies; this covers deployments without it.
+        if (!pushAvailable && msg.user_id !== me && document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
           const title = `${namesRef.current.get(msg.user_id) ?? 'Someone'} in ${ws.name}`
           const options = { body: msg.body.slice(0, 200) || 'Sent an image', tag: ws.id }
           // Android Chrome only allows notifications through the service worker; `new Notification` throws there.
-          void navigator.serviceWorker
-            ?.getRegistration()
-            .then((r) => {
-              if (r) return r.showNotification(title, options)
-              new Notification(title, options)
-            })
+          void navigator.serviceWorker?.getRegistration().then((r) => {
+            if (r) return r.showNotification(title, options)
+            new Notification(title, options)
+          })
         }
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `workspace_id=eq.${ws.id}` }, ({ new: m }) =>
@@ -41,15 +47,15 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
         setMessages((prev) => prev.filter((x) => x.id !== old.id)),
       )
       .subscribe()
-    // shortcut: only the latest 200 messages are loaded, add "load older" if history matters.
     supabase
       .from('messages')
       .select('*')
       .eq('workspace_id', ws.id)
       .order('created_at', { ascending: false })
-      .limit(200)
+      .limit(PAGE)
       .then(({ data, error }) => {
         if (error) return setError(error.message)
+        setHasMore(data.length === PAGE)
         setMessages((prev) => (data as Message[]).reduce(upsert, prev).sort((a, b) => a.created_at.localeCompare(b.created_at)))
       })
     return () => void supabase.removeChannel(channel)
@@ -69,6 +75,38 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
   useEffect(() => {
     if (atBottom.current) scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
   }, [messages])
+
+  const loadOlder = async () => {
+    const el = scroller.current
+    const prevHeight = el?.scrollHeight ?? 0
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('workspace_id', ws.id)
+      .lt('created_at', messages[0].created_at)
+      .order('created_at', { ascending: false })
+      .limit(PAGE)
+    if (error) return setError(error.message)
+    setHasMore(data.length === PAGE)
+    setMessages((prev) => [...(data as Message[]).reverse(), ...prev])
+    // Keep the view on the message the user was reading.
+    requestAnimationFrame(() => el && (el.scrollTop = el.scrollHeight - prevHeight))
+  }
+
+  const search = async (e: FormEvent) => {
+    e.preventDefault()
+    const q = query.trim()
+    if (!q) return setResults(null)
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('workspace_id', ws.id)
+      .ilike('body', `%${q.replace(/[\\%_]/g, '\\$&')}%`)
+      .order('created_at', { ascending: false })
+      .limit(50)
+    if (error) return setError(error.message)
+    setResults(data as Message[])
+  }
 
   const post = async (imagePath: string | null) => {
     const body = draft.trim()
@@ -99,7 +137,7 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      void send()
+      send()
     }
   }
 
@@ -110,11 +148,12 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
     setEditing(null)
   }
 
-  const remove = async (id: string) => {
+  const remove = async (m: Message) => {
     if (!confirm('Delete this message?')) return
-    const { error } = await supabase.from('messages').delete().eq('id', id)
-    if (error) setError(error.message)
-    else setMessages((prev) => prev.filter((m) => m.id !== id))
+    const { error } = await supabase.from('messages').delete().eq('id', m.id)
+    if (error) return setError(error.message)
+    setMessages((prev) => prev.filter((x) => x.id !== m.id))
+    if (m.image_path) void removeIfUnused([m.image_path])
   }
 
   const makeCard = async (m: Message) => {
@@ -134,63 +173,125 @@ export function Chat({ ws, me, names }: { ws: Workspace; me: string; names: Map<
     setError(error ? error.message : `Card added to "${first.title}".`)
   }
 
+  // @mention suggestions for the word being typed at the end of the draft.
+  const myName = names.get(me)
+  const mention = draft.match(/(?:^|\s)@([^@\n]{0,30})$/)
+  const suggestions = mention
+    ? [...new Set(names.values())].filter((n) => n.toLowerCase().startsWith(mention[1].toLowerCase()) && n !== mention[1]).slice(0, 5)
+    : []
+  const insertMention = (name: string) => setDraft(draft.slice(0, draft.length - mention![1].length) + name + ' ')
+
+  const renderMessage = (m: Message, prev: Message | undefined, actions: boolean) => {
+    const name = names.get(m.user_id) ?? 'Former member'
+    const grouped = prev?.user_id === m.user_id && Date.parse(m.created_at) - Date.parse(prev.created_at) < 5 * 60 * 1000
+    const mentionsMe = !!myName && m.user_id !== me && m.body.includes(`@${myName}`)
+    return (
+      <article key={m.id} className={`message ${grouped ? 'grouped' : ''} ${mentionsMe ? 'mentioned' : ''}`}>
+        <div className="message-gutter">{!grouped && <Avatar name={name} id={m.user_id} />}</div>
+        <div className="message-main">
+          {!grouped && (
+            <header className="message-head">
+              <strong>{name}</strong>
+              <time className="muted small" dateTime={m.created_at}>{formatTime(m.created_at)}</time>
+            </header>
+          )}
+          {editing?.id === m.id ? (
+            <div className="stack">
+              <textarea aria-label="Edit message" maxLength={4000} value={editing.body} onChange={(e) => setEditing({ ...editing, body: e.target.value })} />
+              <span className="row">
+                <button className="btn primary small" onClick={saveEdit} disabled={!editing.body.trim() && !m.image_path}>Save</button>
+                <button className="btn ghost small" onClick={() => setEditing(null)}>Cancel</button>
+              </span>
+            </div>
+          ) : (
+            m.body && (
+              <p className="body">
+                {m.body}
+                {m.edited_at && <span className="muted small"> (edited)</span>}
+              </p>
+            )
+          )}
+          {m.image_path && <StoredImage path={m.image_path} alt={`Image from ${name}`} />}
+        </div>
+        {actions && editing?.id !== m.id && (
+          <span className="message-actions">
+            <button className="btn ghost icon-btn small" title="Make card" onClick={() => makeCard(m)}>
+              <Icon name="card" /><span className="visually-hidden">Make card</span>
+            </button>
+            {m.user_id === me && (
+              <>
+                <button className="btn ghost icon-btn small" title="Edit" onClick={() => setEditing({ id: m.id, body: m.body })}>
+                  <Icon name="edit" /><span className="visually-hidden">Edit</span>
+                </button>
+                <button className="btn ghost icon-btn small" title="Delete" onClick={() => remove(m)}>
+                  <Icon name="trash" /><span className="visually-hidden">Delete</span>
+                </button>
+              </>
+            )}
+          </span>
+        )}
+      </article>
+    )
+  }
+
   return (
     <section className="chat" aria-label="Chat">
-      <div
-        className="messages"
-        ref={scroller}
-        onScroll={(e) => {
-          const el = e.currentTarget
-          atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-        }}
-      >
-        {messages.length === 0 && <p className="muted center">No messages yet. Say hi.</p>}
-        {messages.map((m) => (
-          <article key={m.id} className="message">
-            <header className="row">
-              <strong>{names.get(m.user_id) ?? 'Former member'}</strong>
-              <time className="muted" dateTime={m.created_at}>
-                {new Date(m.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
-              </time>
-              {m.edited_at && <span className="muted">(edited)</span>}
-              <span className="actions">
-                <button className="link" onClick={() => makeCard(m)}>Make card</button>
-                {m.user_id === me && (
-                  <>
-                    <button className="link" onClick={() => setEditing({ id: m.id, body: m.body })}>Edit</button>
-                    <button className="link" onClick={() => remove(m.id)}>Delete</button>
-                  </>
-                )}
-              </span>
-            </header>
-            {editing?.id === m.id ? (
-              <div className="stack">
-                <textarea aria-label="Edit message" maxLength={4000} value={editing.body} onChange={(e) => setEditing({ ...editing, body: e.target.value })} />
-                <span className="row">
-                  <button className="primary" onClick={saveEdit} disabled={!editing.body.trim() && !m.image_path}>Save</button>
-                  <button onClick={() => setEditing(null)}>Cancel</button>
-                </span>
-              </div>
-            ) : (
-              m.body && <p className="body">{m.body}</p>
-            )}
-            {m.image_path && <StoredImage path={m.image_path} alt={`Image from ${names.get(m.user_id) ?? 'a former member'}`} />}
-          </article>
-        ))}
-      </div>
-      {error && <p role="status" className="notice" onClick={() => setError('')}>{error}</p>}
-      <form className="composer row" onSubmit={send}>
+      <form className="chat-search" role="search" onSubmit={search}>
+        <Icon name="search" />
+        <input type="search" aria-label="Search messages" placeholder="Search messages" value={query}
+          onChange={(e) => { setQuery(e.target.value); if (!e.target.value) setResults(null) }} />
+      </form>
+      {results ? (
+        <div className="messages">
+          <p className="row spread small muted">
+            {results.length === 0 ? 'No matches.' : `${results.length}${results.length === 50 ? '+' : ''} matches`}
+            <button className="link" onClick={() => { setResults(null); setQuery('') }}>Back to chat</button>
+          </p>
+          {results.map((m) => renderMessage(m, undefined, false))}
+        </div>
+      ) : (
+        <div
+          className="messages"
+          ref={scroller}
+          onScroll={(e) => {
+            const el = e.currentTarget
+            atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+          }}
+        >
+          {hasMore && (
+            <button className="btn ghost small load-older" onClick={loadOlder}>Load older messages</button>
+          )}
+          {messages.length === 0 && (
+            <div className="empty">
+              <Icon name="chat" />
+              <p>No messages yet. Say hi.</p>
+            </div>
+          )}
+          {messages.map((m, i) => renderMessage(m, messages[i - 1], true))}
+        </div>
+      )}
+      {error && <p role="status" className="notice toast" onClick={() => setError('')}>{error}</p>}
+      <form className="composer" onSubmit={send}>
+        {suggestions.length > 0 && (
+          <div className="mentions" aria-label="Mention someone">
+            {suggestions.map((n) => (
+              <button type="button" key={n} onClick={() => insertMention(n)}>@{n}</button>
+            ))}
+          </div>
+        )}
+        <ImagePicker iconOnly label={uploading ? 'Uploading...' : 'Send an image'} disabled={uploading} onPick={sendImage} />
         <textarea
           aria-label="Message"
-          placeholder="Message (Enter to send, Shift+Enter for a new line)"
-          rows={2}
+          placeholder="Message, @ to mention"
+          rows={1}
           maxLength={4000}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKey}
         />
-        <ImagePicker label={uploading ? 'Uploading...' : 'Image'} disabled={uploading} onPick={sendImage} />
-        <button className="primary" disabled={!draft.trim()}>Send</button>
+        <button className="btn primary icon-btn" disabled={!draft.trim()} title="Send">
+          <Icon name="send" /><span className="visually-hidden">Send</span>
+        </button>
       </form>
     </section>
   )

@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { Icon } from './Icon'
 
 // Native <dialog> gives focus trapping, Escape to close and inert background for free.
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
@@ -6,11 +7,14 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   useEffect(() => ref.current?.showModal(), [])
   return (
     <dialog ref={ref} onClose={onClose} aria-labelledby="modal-title">
-      <div className="row spread">
+      <div className="dialog-head">
         <h2 id="modal-title">{title}</h2>
-        <button onClick={() => ref.current?.close()} aria-label="Close">x</button>
+        <button className="btn ghost icon-btn" onClick={() => ref.current?.close()}>
+          <Icon name="x" />
+          <span className="visually-hidden">Close</span>
+        </button>
       </div>
-      {children}
+      <div className="dialog-body">{children}</div>
     </dialog>
   )
 }
