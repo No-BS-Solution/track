@@ -7,6 +7,7 @@ import { FILE_ACCEPT, FileChip, removeFilesIfUnused, uploadFile } from './Files'
 import { MentionList, useMentions } from './mentions'
 import { pushAvailable } from './push'
 import { Avatar, Icon } from './Icon'
+import { isoDate } from './DatePicker'
 
 const PAGE = 100
 const sameReaction = (a: Reaction, b: Reaction) => a.message_id === b.message_id && a.user_id === b.user_id && a.emoji === b.emoji
@@ -308,6 +309,7 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
       image_paths: m.image_path ? [m.image_path] : [],
       attachments: m.file_path ? [{ path: m.file_path, name: m.file_name ?? 'file', size: m.file_size ?? 0 }] : [],
       position: generateKeyBetween(last, null),
+      due_date: isoDate(new Date()),
       source_message_id: m.id,
     })
     setError(error ? error.message : `Card added to "${first.title}".`)

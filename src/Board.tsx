@@ -9,6 +9,7 @@ import { MentionList, useMentions } from './mentions'
 import { Modal } from './Modal'
 import { ImagePicker, StoredImage, removeIfUnused, uploadImage } from './Images'
 import { Avatar, Icon } from './Icon'
+import { DatePicker, isoDate } from './DatePicker'
 
 // Fractional index keys sort by plain code-unit order, not locale order. Id breaks ties from concurrent inserts.
 export const byPosition = (a: { position: string; id: string }, b: { position: string; id: string }) =>
@@ -85,7 +86,7 @@ export function Board({ ws, me, members, openCard, onOpenCard }: {
   const sortedLists = [...lists].sort(byPosition)
   // Archived cards leave the columns entirely, so positions and keyboard moves only consider active cards.
   const cardsIn = (listId: string) => cards.filter((c) => c.list_id === listId && !c.archived_at).sort(byPosition)
-  const today = new Date().toISOString().slice(0, 10)
+  const today = isoDate(new Date())
   const term = search.trim().toLowerCase()
   const labelMap = new Map(labels.map((l) => [l.id, l]))
   const visible = (c: Card) =>
@@ -172,7 +173,7 @@ export function Board({ ws, me, members, openCard, onOpenCard }: {
 
   const addCard = async (listId: string, title: string) => {
     const position = between(cardsIn(listId).at(-1)?.position ?? null, null)
-    const { data, error } = await supabase.from('cards').insert({ list_id: listId, workspace_id: ws.id, title, position }).select().single()
+    const { data, error } = await supabase.from('cards').insert({ list_id: listId, workspace_id: ws.id, title, position, due_date: isoDate(new Date()) }).select().single()
     if (error) return setError(error.message)
     setCards((p) => upsert(p, data as Card))
   }
@@ -415,7 +416,7 @@ function CardItem({ card, assignee, labels, onOpen }: { card: Card; assignee?: s
     [card.id],
   )
 
-  const overdue = card.due_date && card.due_date < new Date().toISOString().slice(0, 10)
+  const overdue = card.due_date && card.due_date < isoDate(new Date())
   const done = card.checklist.filter((i) => i.done).length
   return (
     <li ref={ref} className={`card ${dragging ? 'dragging' : ''} ${edge ? `drop-${edge}` : ''}`}>
@@ -605,10 +606,11 @@ function CardEditor({ card, me, lists, index, count, members, names, labels, onM
                 ))}
               </select>
             </label>
-            <label className="field">
+            {/* Not a <label>: clicks inside the calendar would re-trigger its button. */}
+            <div className="field">
               <span>Due date</span>
-              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
-            </label>
+              <DatePicker label="Due date" value={due} onChange={setDue} />
+            </div>
           </div>
           {source !== null && <blockquote className="muted">From chat: {source}</blockquote>}
         </form>
