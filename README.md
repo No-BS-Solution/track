@@ -8,6 +8,7 @@ Ultra-simple team chat plus a Trello-style board in one window. A static single-
 - Chat with images and files (paste or drag in), replies, reactions, pins, @mentions, search, a "New messages" marker, typing indicator and full history.
 - Board with columns, drag and drop, assignees, due dates, labels, checklists, comments with @mentions, images, files, filters and archiving. Share any card into chat.
 - Export a workspace as JSON. Light, dark or system theme.
+- Voice and video calls for small groups (up to about 5 people) with screen sharing from desktop browsers. Members are rung by push notification and can answer from it. Calls connect peer to peer using public STUN servers only, so a few strict networks cannot connect; add a TURN server in `src/Call.tsx` if that matters to you.
 - Turn any chat message into a card with "Make card".
 - Push notifications on phones and desktops, even when Track is closed, with a per-workspace choice of all messages, @mentions only, or muted (optional setup, see below).
 
