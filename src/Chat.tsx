@@ -27,7 +27,6 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
   const [showPins, setShowPins] = useState(false)
   // Where the user left off, captured once before this visit marks everything read.
   const [readMark] = useState(lastReadAt)
-  const scrolledToDivider = useRef(false)
   const [reactions, setReactions] = useState<Reaction[]>([])
   const [cardTitles, setCardTitles] = useState<Map<string, string>>(new Map())
   const [hasMore, setHasMore] = useState(false)
@@ -122,8 +121,11 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
   // Mark read only while the chat is actually on screen; this also drives other people's "Seen".
   useEffect(() => {
     const markRead = () => {
-      if (visible && !document.hidden)
-        void supabase.from('workspace_members').update({ last_read_at: new Date().toISOString() }).eq('workspace_id', ws.id).eq('user_id', me)
+      if (!visible || document.hidden) return
+      // Message times come from the server; a device clock running behind would leave the newest one "unread".
+      const latest = messages[messages.length - 1]?.created_at
+      const at = latest && Date.parse(latest) > Date.now() ? latest : new Date().toISOString()
+      void supabase.from('workspace_members').update({ last_read_at: at }).eq('workspace_id', ws.id).eq('user_id', me)
     }
     markRead()
     document.addEventListener('visibilitychange', markRead)
@@ -143,15 +145,10 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
     return () => void supabase.removeChannel(ch)
   }, [ws.id])
 
+  // Stick to the bottom; re-run on `visible` because a hidden pane has no height to scroll.
   useEffect(() => {
-    // On arrival, start at the "New messages" divider instead of the bottom.
-    const divider = scroller.current?.querySelector('.new-divider')
-    if (divider && !scrolledToDivider.current) {
-      scrolledToDivider.current = true
-      atBottom.current = false
-      divider.scrollIntoView({ block: 'start' })
-    } else if (atBottom.current) scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
-  }, [messages])
+    if (atBottom.current) scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
+  }, [messages, visible])
 
   const loadOlder = async () => {
     const el = scroller.current
