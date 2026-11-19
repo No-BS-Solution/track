@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { generateKeyBetween } from 'fractional-indexing'
-import { EMOJIS, formatTime, supabase, upsert, type Card, type List, type Message, type Reaction, type Workspace } from './supabase'
+import { EMOJIS, formatTime, supabase, upsert, type Card, type List, type Member, type Message, type Reaction, type Workspace } from './supabase'
 import { byPosition } from './Board'
 import { StoredImage, removeIfUnused, uploadImage } from './Images'
 import { FILE_ACCEPT, FileChip, removeFilesIfUnused, uploadFile } from './Files'
@@ -11,10 +11,12 @@ import { Avatar, Icon } from './Icon'
 const PAGE = 100
 const sameReaction = (a: Reaction, b: Reaction) => a.message_id === b.message_id && a.user_id === b.user_id && a.emoji === b.emoji
 
-export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt }: {
+export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt, members, visible }: {
   ws: Workspace
   me: string
   lastReadAt: string | null
+  members: Member[]
+  visible: boolean
   names: Map<string, string>
   typing: string[]
   setTyping: (typing: boolean) => void
@@ -117,16 +119,29 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt 
     })
   }, [messages, cardTitles])
 
-  // Mark read while the chat is visible.
+  // Mark read only while the chat is actually on screen; this also drives other people's "Seen".
   useEffect(() => {
     const markRead = () => {
-      if (!document.hidden)
+      if (visible && !document.hidden)
         void supabase.from('workspace_members').update({ last_read_at: new Date().toISOString() }).eq('workspace_id', ws.id).eq('user_id', me)
     }
     markRead()
     document.addEventListener('visibilitychange', markRead)
     return () => document.removeEventListener('visibilitychange', markRead)
-  }, [ws.id, me, messages.length])
+  }, [ws.id, me, messages.length, visible])
+
+  // Everyone's read position, kept live for read receipts.
+  const [readAt, setReadAt] = useState<Record<string, string>>(() => Object.fromEntries(members.map((m) => [m.user_id, m.last_read_at])))
+  useEffect(() => {
+    const ch = supabase
+      .channel(`reads:${ws.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'workspace_members', filter: `workspace_id=eq.${ws.id}` }, ({ new: r }) => {
+        const row = r as Pick<Member, 'user_id' | 'last_read_at'>
+        setReadAt((prev) => ({ ...prev, [row.user_id]: row.last_read_at }))
+      })
+      .subscribe()
+    return () => void supabase.removeChannel(ch)
+  }, [ws.id])
 
   useEffect(() => {
     // On arrival, start at the "New messages" divider instead of the bottom.
@@ -310,6 +325,16 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt 
   // First message from someone else since the last visit gets the "New messages" divider.
   const firstUnread = readMark ? messages.findIndex((m) => m.created_at > readMark && m.user_id !== me) : -1
 
+  // "Seen" goes under my latest message: whoever has read the chat since it was sent.
+  let lastMine = -1
+  for (let i = messages.length - 1; i >= 0 && lastMine < 0; i--) if (messages[i].user_id === me) lastMine = i
+  const others = members.filter((m) => m.user_id !== me).map((m) => m.user_id)
+  // Compare as times: live updates and normal queries don't always format timestamps the same way.
+  const seenBy = lastMine < 0 ? [] : others.filter((u) => readAt[u] && Date.parse(readAt[u]) >= Date.parse(messages[lastMine].created_at))
+  const seenText =
+    seenBy.length === 0 ? '' : seenBy.length === others.length ? (others.length === 1 ? 'Seen' : 'Seen by everyone')
+      : `Seen by ${seenBy.map((u) => names.get(u) ?? 'someone').join(', ')}`
+
   const renderMessage = (m: Message, prev: Message | undefined, actions: boolean) => {
     const name = names.get(m.user_id) ?? 'Former member'
     const grouped = !m.reply_to && prev?.user_id === m.user_id && Date.parse(m.created_at) - Date.parse(prev.created_at) < 5 * 60 * 1000
@@ -484,6 +509,7 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt 
             <Fragment key={m.id}>
               {i === firstUnread && <div className="new-divider"><span>New messages</span></div>}
               {renderMessage(m, i === firstUnread ? undefined : messages[i - 1], true)}
+              {i === lastMine && seenText && <p className="seen muted small">{seenText}</p>}
             </Fragment>
           ))}
         </div>

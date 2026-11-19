@@ -20,6 +20,19 @@ const percent = (u: Usage) => ({
 })
 const mb = (bytes: number) => `${(bytes / 1024 ** 2).toFixed(bytes < 10 * 1024 ** 2 ? 1 : 0)} MB`
 
+// Matches the CSS breakpoint where chat and board sit side by side instead of in tabs.
+function useWide(): boolean {
+  const query = '(min-width: 801px)'
+  const [wide, setWide] = useState(() => matchMedia(query).matches)
+  useEffect(() => {
+    const mq = matchMedia(query)
+    const onChange = () => setWide(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return wide
+}
+
 export function WorkspaceView({ workspaceId, cardId, callId, me }: {
   workspaceId: string
   cardId: string | null
@@ -34,6 +47,7 @@ export function WorkspaceView({ workspaceId, cardId, callId, me }: {
   const [openCard, setOpenCard] = useState<string | null>(null)
   const presence = usePresence(workspaceId, me)
   const activeCall = useActiveCall(workspaceId)
+  const wide = useWide()
   const [notify, setNotify] = useState(typeof Notification === 'undefined' ? 'denied' : Notification.permission)
   const install = useInstall()
 
@@ -130,7 +144,7 @@ export function WorkspaceView({ workspaceId, cardId, callId, me }: {
       </nav>
       <div className={`panes show-${tab}`}>
         <Chat ws={ws} me={me} names={names} typing={presence.typing} lastReadAt={members.find((m) => m.user_id === me)?.last_read_at ?? null} setTyping={presence.setTyping}
-          onOpenCard={(id) => { setOpenCard(id); setTab('board') }} />
+          onOpenCard={(id) => { setOpenCard(id); setTab('board') }} members={members} visible={wide || tab === 'chat'} />
         <Board ws={ws} me={me} members={members} openCard={openCard} onOpenCard={setOpenCard} />
       </div>
       {settings && (
