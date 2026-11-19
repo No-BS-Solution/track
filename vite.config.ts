@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { cpSync, mkdirSync } from 'node:fs'
 
 // Fail fast if the Supabase config is missing or is a key that must never ship in a public bundle.
 function checkSupabaseEnv(url: string | undefined, key: string | undefined): void {
@@ -23,9 +24,18 @@ function checkSupabaseEnv(url: string | undefined, key: string | undefined): voi
   }
 }
 
+// MediaPipe's WebAssembly runtime (camera background blur) is served from our own origin, since the CSP
+// allows no CDNs. Copied into public/ (gitignored) so dev and build both serve it.
+function copyMediaPipe(): void {
+  mkdirSync('public/mediapipe', { recursive: true })
+  for (const f of ['vision_wasm_internal.js', 'vision_wasm_internal.wasm'])
+    cpSync(`node_modules/@mediapipe/tasks-vision/wasm/${f}`, `public/mediapipe/${f}`)
+}
+
 export default defineConfig(({ mode }) => {
   const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env }
   checkSupabaseEnv(env.VITE_SUPABASE_URL, env.VITE_SUPABASE_ANON_KEY)
+  copyMediaPipe()
   return {
     // Forks deploy under their own repo name: https://<user>.github.io/<repo>/
     base: env.BASE_PATH || '/track/',
@@ -59,6 +69,9 @@ export default defineConfig(({ mode }) => {
         },
         injectManifest: {
           globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
+          // The blur runtime is large and optional; fetch it on demand instead of precaching it for everyone.
+          globIgnores: ['mediapipe/**', 'models/**', '**/vision_bundle*.js'],
+          maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         },
       }),
     ],

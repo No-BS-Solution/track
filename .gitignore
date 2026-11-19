@@ -6,3 +6,4 @@ dev-dist
 !.env.example
 *.log
 .claude/settings.local.json*
+public/mediapipe

@@ -546,3 +546,5 @@ progress.full::-moz-progress-bar { background: var(--danger); }
 @media (max-width: 600px) {
   .call.mini { left: 8px; right: 8px; bottom: 8px; width: auto; }
 }
+.call.mini .call-head { cursor: grab; touch-action: none; user-select: none; }
+.icon-blur { stroke-width: 2.2; }

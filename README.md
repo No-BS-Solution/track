@@ -72,7 +72,7 @@ The source is public and the anon key ends up in the bundle, so security never d
 - Workspaces and memberships can only be created through the `create_workspace` and `join_workspace` functions. Roles can never be changed through the API. Column privileges limit what each update can touch (for example, members can only change their own `last_read_at`, and authors only the `body` of their messages).
 - **No secrets in the repo.** `.env` and `.env.*` are gitignored. Never use the service role key in this project.
 - **User content is rendered as plain text**, never as HTML or markdown. Supabase stores the session in browser storage, so any script injection could steal it.
-- **Content Security Policy** (meta tag in `index.html`, because GitHub Pages cannot set headers) allows scripts only from the app itself and network connections only to `*.supabase.co`. No third-party scripts, fonts, analytics, or CDNs.
+- **Content Security Policy** (meta tag in `index.html`, because GitHub Pages cannot set headers) allows scripts only from the app itself and network connections only to `*.supabase.co`. It also allows WebAssembly (`wasm-unsafe-eval`), which the on-device camera background blur needs; the blur runtime and model are served from the app itself, never a CDN. No third-party scripts, fonts, analytics, or CDNs.
 - The service worker precaches only the static app shell. Supabase API and auth responses are never cached.
 
 ### Self-hosted Supabase

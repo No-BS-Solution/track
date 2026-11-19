@@ -1,7 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RealtimeChannel, RealtimeChannelOptions } from '@supabase/supabase-js'
 import { supabase, type Workspace } from './supabase'
 import { Avatar, Icon } from './Icon'
+import { blurSupported, blurTrack, type Blurred } from './blur'
+
+const BLUR_KEY = 'track-blur'
+const readBlur = () => {
+  try {
+    return localStorage.getItem(BLUR_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 // Public STUN only. shortcut: no TURN relay, so a few strict networks (some mobile carriers, office
 // firewalls) cannot connect; add TURN credentials here if that happens.
@@ -206,7 +216,12 @@ export function CallView({ ws, callId, me, names, onLeave }: {
   const [others, setOthers] = useState<string[]>([])
   const [mine, setMine] = useState<MediaState>({ mic: true, cam: false, screen: false })
   const [selfStream, setSelfStream] = useState<MediaStream | null>(null)
-  const [mini, setMini] = useState(false)
+  // Desktop: a floating window over the app, like Teams. Phones: full screen, with a minimise button.
+  const [mini, setMini] = useState(() => matchMedia('(min-width: 801px)').matches)
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const [blur, setBlur] = useState(() => blurSupported && readBlur())
+  const [blurBusy, setBlurBusy] = useState(false)
+  const blurred = useRef<Blurred | null>(null)
   const [ended, setEnded] = useState('')
   const [error, setError] = useState('')
   const [blocked, setBlocked] = useState(false)
@@ -228,7 +243,7 @@ export function CallView({ ws, callId, me, names, onLeave }: {
 
   const send = (to: string, s: Signal) =>
     void channel.current?.send({ type: 'broadcast', event: 'signal', payload: { ...s, from: session, to } satisfies Envelope })
-  const currentVideo = () => tracks.current.screen ?? tracks.current.camera
+  const currentVideo = () => tracks.current.screen ?? blurred.current?.track ?? tracks.current.camera
   const videoSenders = () =>
     [...pcs.current.values()].flatMap((pc) => pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video').map((t) => t.sender))
   const othersNow = () => Object.keys(channel.current?.presenceState() ?? {}).filter((k) => k !== session)
@@ -379,6 +394,8 @@ export function CallView({ ws, callId, me, names, onLeave }: {
       greeted.current.clear()
       for (const t of Object.values(tracks.current)) t?.stop()
       tracks.current = { audio: null, camera: null, screen: null }
+      blurred.current?.stop()
+      blurred.current = null
       channel.current = null
       if (ch) void supabase.removeChannel(ch)
     }
@@ -399,8 +416,30 @@ export function CallView({ ws, callId, me, names, onLeave }: {
     update({ ...mine, mic: t.enabled })
   }
 
+  const swapVideo = () => {
+    for (const s of videoSenders()) void s.replaceTrack(currentVideo())
+  }
+
+  // Starts or stops the blur pipeline on the current camera. Falls back to the plain camera on failure.
+  const applyBlur = async (on: boolean) => {
+    blurred.current?.stop()
+    blurred.current = null
+    const camera = tracks.current.camera
+    if (on && camera) {
+      setBlurBusy(true)
+      try {
+        blurred.current = await blurTrack(camera)
+      } catch (e) {
+        console.warn('blur', e)
+        setError('Background blur could not start on this device.')
+      }
+      setBlurBusy(false)
+    }
+  }
+
   const toggleCam = async () => {
     if (tracks.current.camera) {
+      await applyBlur(false)
       tracks.current.camera.stop()
       tracks.current.camera = null
     } else {
@@ -410,9 +449,49 @@ export function CallView({ ws, callId, me, names, onLeave }: {
       } catch {
         return setError('Track could not use your camera. Allow it in your browser settings.')
       }
+      if (blur) await applyBlur(true)
     }
-    for (const s of videoSenders()) void s.replaceTrack(currentVideo())
-    update({ ...mine, cam: !!tracks.current.camera })
+    swapVideo()
+    update({ ...mineRef.current, cam: !!tracks.current.camera })
+  }
+
+  const toggleBlur = async () => {
+    const on = !blur
+    setBlur(on)
+    try {
+      localStorage.setItem(BLUR_KEY, on ? '1' : '0')
+    } catch {
+      // Storage blocked: the choice lasts for this call only.
+    }
+    if (!tracks.current.camera) return
+    await applyBlur(on)
+    swapVideo()
+    update({ ...mineRef.current })
+  }
+
+  // Someone else starting to share expands the call so the shared screen is readable.
+  const sharingPeers = Object.entries(states).filter(([, s]) => s.screen).map(([p]) => p).join()
+  useEffect(() => {
+    if (sharingPeers) setMini(false)
+  }, [sharingPeers])
+
+  // Drag the floating window by its header.
+  const startDrag = (e: ReactPointerEvent<HTMLElement>) => {
+    if (!mini || (e.target as HTMLElement).closest('button')) return
+    const box = e.currentTarget.parentElement!.getBoundingClientRect()
+    const dx = e.clientX - box.left
+    const dy = e.clientY - box.top
+    const move = (ev: PointerEvent) =>
+      setPos({
+        x: Math.min(Math.max(0, ev.clientX - dx), innerWidth - box.width),
+        y: Math.min(Math.max(0, ev.clientY - dy), innerHeight - box.height),
+      })
+    const up = () => {
+      removeEventListener('pointermove', move)
+      removeEventListener('pointerup', up)
+    }
+    addEventListener('pointermove', move)
+    addEventListener('pointerup', up)
   }
 
   const stopScreen = () => {
@@ -454,14 +533,15 @@ export function CallView({ ws, callId, me, names, onLeave }: {
     )
 
   return (
-    <div className={`call ${mini ? 'mini' : ''}`} role="dialog" aria-label={`Call in ${ws.name}`}>
-      <header className="call-head">
+    <div className={`call ${mini ? 'mini' : ''}`} role="dialog" aria-label={`Call in ${ws.name}`}
+      style={mini && pos ? { left: pos.x, top: pos.y, right: 'auto', bottom: 'auto' } : undefined}>
+      <header className="call-head" onPointerDown={startDrag} title={mini ? 'Drag to move' : undefined}>
         <span className="grow">
           <strong>{ws.name}</strong>
           <span className="muted small"> {others.length === 0 ? 'Waiting for others...' : `${others.length + 1} in call`}</span>
         </span>
-        <button className="btn call-btn small-btn" onClick={() => setMini(!mini)} title={mini ? 'Expand call' : 'Minimise call to use the board and chat'}>
-          <Icon name={mini ? 'up' : 'down'} /><span className="visually-hidden">{mini ? 'Expand call' : 'Minimise call'}</span>
+        <button className="btn call-btn small-btn" onClick={() => setMini(!mini)} title={mini ? 'Full screen' : 'Small window, to use the board and chat'}>
+          <Icon name={mini ? 'expand' : 'shrink'} /><span className="visually-hidden">{mini ? 'Full screen' : 'Small window'}</span>
         </button>
       </header>
       {error && <p role="alert" className="notice toast" onClick={() => setError('')}>{error}</p>}
@@ -482,6 +562,12 @@ export function CallView({ ws, callId, me, names, onLeave }: {
         <button className={`btn call-btn ${mine.cam ? '' : 'off'}`} onClick={toggleCam} title={mine.cam ? 'Turn camera off' : 'Turn camera on'}>
           <Icon name={mine.cam ? 'video' : 'videoOff'} /><span className="visually-hidden">{mine.cam ? 'Turn camera off' : 'Turn camera on'}</span>
         </button>
+        {blurSupported && (
+          <button className={`btn call-btn ${blur ? 'active' : ''}`} onClick={() => void toggleBlur()} disabled={blurBusy}
+            title={blurBusy ? 'Starting blur...' : blur ? 'Turn background blur off' : 'Blur my background'}>
+            <Icon name="blur" /><span className="visually-hidden">{blur ? 'Turn background blur off' : 'Blur my background'}</span>
+          </button>
+        )}
         {canShare && (
           <button className={`btn call-btn ${mine.screen ? 'active' : ''}`} onClick={toggleScreen} title={mine.screen ? 'Stop sharing' : 'Share screen'}>
             <Icon name="monitor" /><span className="visually-hidden">{mine.screen ? 'Stop sharing' : 'Share screen'}</span>
