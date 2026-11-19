@@ -2,7 +2,7 @@
 -- Simulates attackers calling the API directly with the anon key or their own session.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(55);
+select plan(61);
 
 insert into auth.users (id, email) values
   ('11111111-1111-1111-1111-111111111111', 'alice@example.com'),
@@ -62,6 +62,10 @@ select throws_ok($$ insert into public.messages (workspace_id, body) values (cur
 select is((select count(*) from storage.objects where bucket_id = 'images'), 0::bigint, 'non-member sees no images');
 select throws_ok($$ insert into storage.objects (bucket_id, name) values ('images', current_setting('t.ws') || '/evil.png') $$,
   '42501', null, 'non-member cannot upload to workspace folder');
+select throws_ok($$ insert into storage.objects (bucket_id, name) values ('files', current_setting('t.ws') || '/evil.pdf') $$,
+  '42501', null, 'non-member cannot upload files to workspace folder');
+select public.set_pinned(current_setting('t.m1')::uuid, true);
+select is((select count(*) from public.labels), 0::bigint, 'non-member sees no labels');
 select throws_ok($$ select public.join_workspace('000000000000') $$, 'P0001', 'invalid invite code', 'bad invite code rejected');
 update public.cards set title = 'pwned';
 delete from public.lists;
@@ -98,6 +102,14 @@ select lives_ok($$ insert into public.message_reactions (message_id, workspace_i
 select throws_ok($$ insert into public.message_reactions (message_id, workspace_id, emoji) values (current_setting('t.m1')::uuid, current_setting('t.ws')::uuid, '<b>') $$,
   '23514', null, 'only known reactions allowed');
 select lives_ok($$ update public.cards set archived_at = now() $$, 'member can archive cards');
+select lives_ok($$ insert into public.labels (workspace_id, name, color) values (current_setting('t.ws')::uuid, 'Bug', 'red') $$, 'member adds a label');
+select throws_ok($$ insert into public.labels (workspace_id, name, color) values (current_setting('t.ws')::uuid, 'x', 'url(evil)') $$,
+  '23514', null, 'only known label colors');
+select public.set_pinned(current_setting('t.m1')::uuid, true);
+select ok((select pinned_at is not null and edited_at is null from public.messages where id = current_setting('t.m1')::uuid),
+  'member pins another member''s message without marking it edited');
+select lives_ok($$ insert into public.messages (workspace_id, body, file_path, file_name) values (current_setting('t.ws')::uuid, '', current_setting('t.ws') || '/f.pdf', 'f.pdf') $$,
+  'message can be just a file');
 select lives_ok($$ update public.workspace_members set notify = 'mentions' where user_id = auth.uid() $$, 'member sets own notification level');
 select lives_ok($$ select public.save_push_subscription('https://fcm.googleapis.com/fcm/send/x', 'key', 'auth') $$, 'member saves push subscription');
 
@@ -107,7 +119,7 @@ update public.workspaces set name = 'Renamed' where id = current_setting('t.ws')
 select is((select name from public.workspaces where id = current_setting('t.ws')::uuid), 'Renamed', 'owner can rename');
 select is((select count(*) from public.push_subscriptions), 0::bigint, 'cannot see others push subscriptions');
 select isnt(public.regenerate_invite_code(current_setting('t.ws')::uuid), current_setting('t.code'), 'owner rotates invite code');
-select is(public.delete_history_before(current_setting('t.ws')::uuid, now() + interval '1 minute'), 3, 'owner deletes history');
+select is(public.delete_history_before(current_setting('t.ws')::uuid, now() + interval '1 minute'), 4, 'owner deletes history');
 delete from public.workspace_members where user_id = '22222222-2222-2222-2222-222222222222';
 select is((select count(*) from public.workspace_members where workspace_id = current_setting('t.ws')::uuid), 1::bigint, 'owner can remove member');
 

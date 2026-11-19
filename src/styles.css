@@ -32,7 +32,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --bg: #0e1015;
     --surface: #161920;
     --surface-2: #1d2129;
@@ -57,6 +57,33 @@
     --avatar-text-l: 86%;
   }
 }
+/* Manual choice from the theme button wins over the system setting. */
+:root[data-theme='dark'] {
+    --bg: #0e1015;
+    --surface: #161920;
+    --surface-2: #1d2129;
+    --surface-3: #282d38;
+    --text: #e8ebf1;
+    --muted: #949bab;
+    --border: #2a2f3b;
+    --accent: #6b93ff;
+    --accent-hover: #86a7ff;
+    --accent-soft: #1c2640;
+    --accent-text: #0b0d12;
+    --danger: #ff6b6b;
+    --danger-soft: #3a1d20;
+    --success: #4cc98d;
+    --success-soft: #16301f;
+    --warn-bg: #3a3118;
+    --warn-text: #f2d48a;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-md: 0 6px 18px rgb(0 0 0 / 0.4);
+    --shadow-lg: 0 24px 60px rgb(0 0 0 / 0.6);
+    --avatar-l: 32%;
+    --avatar-text-l: 86%;
+  color-scheme: dark;
+}
+:root[data-theme='light'] { color-scheme: light; }
 
 /* Base */
 * { box-sizing: border-box; }
@@ -379,3 +406,57 @@ progress.full::-moz-progress-bar { background: var(--danger); }
 .archived { margin-bottom: 14px; padding: 14px 16px; }
 .archived-list { display: flex; flex-direction: column; gap: 6px; }
 .archived-list li { display: flex; gap: 10px; align-items: baseline; }
+
+/* Labels: one hue per colour, lightness flips with the theme */
+:root { --label-bg-l: 90%; --label-fg-l: 28%; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --label-bg-l: 26%; --label-fg-l: 84%; } }
+:root[data-theme='dark'] { --label-bg-l: 26%; --label-fg-l: 84%; }
+.label {
+  --s: 70%;
+  display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px;
+  font-size: 0.75rem; font-weight: 650; white-space: nowrap;
+  background: hsl(var(--h) var(--s) var(--label-bg-l)); color: hsl(var(--h) var(--s) var(--label-fg-l));
+}
+.label-red { --h: 0; }
+.label-orange { --h: 28; }
+.label-yellow { --h: 46; }
+.label-green { --h: 140; --s: 50%; }
+.label-teal { --h: 175; --s: 55%; }
+.label-blue { --h: 215; }
+.label-purple { --h: 268; --s: 60%; }
+.label-gray { --h: 220; --s: 10%; }
+.card-labels { display: flex; flex-wrap: wrap; gap: 4px; }
+.label-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.label-picker .label { height: 28px; padding: 0 10px; font-size: 0.85rem; border: 2px solid transparent; }
+.label-picker .label.on { border-color: hsl(var(--h) var(--s) var(--label-fg-l)); }
+.label-picker .label.off { opacity: 0.55; }
+.label-filter { width: auto; height: 36px; }
+
+/* Files */
+.file-chip { display: flex; align-items: center; gap: 4px; max-width: 360px; margin-top: 6px; }
+.file-open {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 8px 12px; text-align: left;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.file-open:hover { border-color: var(--accent); }
+.file-open .icon { color: var(--accent); }
+.file-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 550; }
+
+/* Pins */
+.pins { border-bottom: 1px solid var(--border); }
+.pins-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 14px; text-align: left; font-size: 0.85rem; }
+.pins-toggle .grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pins-toggle:hover { background: var(--surface-2); }
+.pins-list { max-height: 220px; overflow-y: auto; padding: 0 8px 8px; }
+.pins-list li { display: flex; align-items: center; gap: 6px; }
+.link-row { flex: 1; min-width: 0; text-align: left; padding: 6px; border-radius: 6px; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link-row:hover { background: var(--surface-2); }
+.message.pinned { box-shadow: inset 3px 0 0 var(--warn-text); }
+.message-actions .btn[aria-pressed='true'] { color: var(--accent); }
+
+/* "New messages" divider */
+.new-divider { display: flex; align-items: center; gap: 10px; margin: 10px 12px; color: var(--danger); font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.new-divider::before, .new-divider::after { content: ''; flex: 1; height: 1px; background: var(--danger); opacity: 0.5; }
+
+.comment-form { position: relative; }
+.comment-form .mentions { left: 0; }

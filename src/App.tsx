@@ -5,6 +5,7 @@ import { Auth, SetPassword } from './Auth'
 import { Home } from './Home'
 import { WorkspaceView } from './Workspace'
 import { stopPush, syncPush } from './push'
+import './theme'
 
 function useHash(): string {
   const [hash, setHash] = useState(location.hash)
@@ -73,8 +74,9 @@ export function App() {
     )
 
   const me = session.user.id
-  const ws = hash.match(/^#\/w\/([0-9a-f-]{36})$/)
-  if (ws) return <WorkspaceView key={ws[1]} workspaceId={ws[1]} me={me} />
+  // #/w/<workspace> or #/w/<workspace>/c/<card> (used by comment notifications)
+  const ws = hash.match(/^#\/w\/([0-9a-f-]{36})(?:\/c\/([0-9a-f-]{36}))?$/)
+  if (ws) return <WorkspaceView key={ws[1]} workspaceId={ws[1]} cardId={ws[2] ?? null} me={me} />
   const join = hash.match(/^#\/join\/([0-9a-fA-F]{12})$/)
   return <Home me={me} email={session.user.email ?? ''} joinCode={join?.[1] ?? ''} onSignOut={signOut} />
 }

@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { supabase } from './supabase'
 import { useInstall } from './install'
 import { Avatar, Icon, Logo } from './Icon'
+import { ThemeToggle } from './theme'
 
 type Row = { workspace_id: string; role: string; last_read_at: string; workspaces: { name: string } | null; unread: number }
 
@@ -79,6 +80,7 @@ export function Home({ me, email, joinCode, onSignOut }: { me: string; email: st
               <Icon name="download" /> Install app
             </button>
           )}
+          <ThemeToggle />
           <button className="btn ghost" onClick={onSignOut} title={`Signed in as ${email}`}>
             <Icon name="logout" /> <span className="hide-sm">Sign out</span>
           </button>

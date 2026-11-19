@@ -5,8 +5,9 @@ Ultra-simple team chat plus a Trello-style board in one window. A static single-
 - A **workspace** has one chat and one board.
 - People join with an invite link or code.
 - Two roles: **owners** (one or more: rename, delete, manage members and roles) and **members**.
-- Chat with images (paste or drag in), replies, reactions, @mentions, search, typing indicator and full history.
-- Board with columns, drag and drop, assignees, due dates, checklists, comments, images, filters and archiving. Share any card into chat.
+- Chat with images and files (paste or drag in), replies, reactions, pins, @mentions, search, a "New messages" marker, typing indicator and full history.
+- Board with columns, drag and drop, assignees, due dates, labels, checklists, comments with @mentions, images, files, filters and archiving. Share any card into chat.
+- Export a workspace as JSON. Light, dark or system theme.
 - Turn any chat message into a card with "Make card".
 - Push notifications on phones and desktops, even when Track is closed, with a per-workspace choice of all messages, @mentions only, or muted (optional setup, see below).
 
@@ -104,6 +105,7 @@ Without the setup below, notifications only arrive while Track is open in the ba
 
 The Supabase free plan includes 500 MB of database and 1 GB of file storage.
 
+- Files (PDF, Office, OpenDocument, text, CSV, Markdown, JSON, ZIP) are limited to 10 MB each and always download rather than open in the browser. Web pages, scripts and SVG are not accepted.
 - Images are resized to at most 1600px and re-encoded in the browser before upload, usually to a few hundred KB.
 - Deleting a message, card or image deletes the file once nothing else uses it.
 - Workspace Settings > Storage shows usage. Above 90% everyone sees a warning, and the owner can delete messages and images older than 30, 90, 180 or 365 days, or remove unused image files.

@@ -1,23 +1,31 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { generateKeyBetween } from 'fractional-indexing'
 import { EMOJIS, formatTime, supabase, upsert, type Card, type List, type Message, type Reaction, type Workspace } from './supabase'
 import { byPosition } from './Board'
-import { ImagePicker, StoredImage, removeIfUnused, uploadImage } from './Images'
+import { StoredImage, removeIfUnused, uploadImage } from './Images'
+import { FILE_ACCEPT, FileChip, removeFilesIfUnused, uploadFile } from './Files'
+import { MentionList, useMentions } from './mentions'
 import { pushAvailable } from './push'
 import { Avatar, Icon } from './Icon'
 
 const PAGE = 100
 const sameReaction = (a: Reaction, b: Reaction) => a.message_id === b.message_id && a.user_id === b.user_id && a.emoji === b.emoji
 
-export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
+export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt }: {
   ws: Workspace
   me: string
+  lastReadAt: string | null
   names: Map<string, string>
   typing: string[]
   setTyping: (typing: boolean) => void
   onOpenCard: (cardId: string) => void
 }) {
   const [messages, setMessages] = useState<Message[]>([])
+  const [pinned, setPinned] = useState<Message[]>([])
+  const [showPins, setShowPins] = useState(false)
+  // Where the user left off, captured once before this visit marks everything read.
+  const [readMark] = useState(lastReadAt)
+  const scrolledToDivider = useRef(false)
   const [reactions, setReactions] = useState<Reaction[]>([])
   const [cardTitles, setCardTitles] = useState<Map<string, string>>(new Map())
   const [hasMore, setHasMore] = useState(false)
@@ -60,13 +68,16 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
           })
         }
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `workspace_id=eq.${ws.id}` }, ({ new: m }) =>
-        setMessages((prev) => upsert(prev, m as Message)),
-      )
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `workspace_id=eq.${ws.id}` }, ({ new: m }) => {
+        const msg = m as Message
+        setMessages((prev) => upsert(prev, msg))
+        setPinned((prev) => (msg.pinned_at ? upsert(prev, msg) : prev.filter((x) => x.id !== msg.id)))
+      })
       // DELETE events can't be filtered and only carry the primary key; keys from other workspaces simply don't match.
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, ({ old }) =>
-        setMessages((prev) => prev.filter((x) => x.id !== old.id)),
-      )
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, ({ old }) => {
+        setMessages((prev) => prev.filter((x) => x.id !== old.id))
+        setPinned((prev) => prev.filter((x) => x.id !== old.id))
+      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `workspace_id=eq.${ws.id}` }, ({ new: r }) =>
         setReactions((prev) => (prev.some((x) => sameReaction(x, r as Reaction)) ? prev : [...prev, r as Reaction])),
       )
@@ -86,6 +97,14 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
         setMessages((prev) => (data as Message[]).reduce(upsert, prev).sort((a, b) => a.created_at.localeCompare(b.created_at)))
         void loadReactions((data as Message[]).map((m) => m.id))
       })
+    supabase
+      .from('messages')
+      .select('*')
+      .eq('workspace_id', ws.id)
+      .not('pinned_at', 'is', null)
+      .order('pinned_at', { ascending: false })
+      .limit(20)
+      .then(({ data }) => data && setPinned(data as Message[]))
     return () => void supabase.removeChannel(channel)
   }, [ws.id, ws.name, me])
 
@@ -110,7 +129,13 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
   }, [ws.id, me, messages.length])
 
   useEffect(() => {
-    if (atBottom.current) scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
+    // On arrival, start at the "New messages" divider instead of the bottom.
+    const divider = scroller.current?.querySelector('.new-divider')
+    if (divider && !scrolledToDivider.current) {
+      scrolledToDivider.current = true
+      atBottom.current = false
+      divider.scrollIntoView({ block: 'start' })
+    } else if (atBottom.current) scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
   }, [messages])
 
   const loadOlder = async () => {
@@ -156,12 +181,13 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
     }, 3000)
   }
 
-  const post = async (imagePath: string | null) => {
+  type Extra = { image_path?: string; file_path?: string; file_name?: string; file_size?: number }
+  const post = async (extra: Extra = {}) => {
     const body = draft.trim()
-    if (!body && !imagePath) return
+    if (!body && !extra.image_path && !extra.file_path) return
     const { data, error } = await supabase
       .from('messages')
-      .insert({ workspace_id: ws.id, body, image_path: imagePath, reply_to: replyTo?.id ?? null })
+      .insert({ workspace_id: ws.id, body, ...extra, reply_to: replyTo?.id ?? null })
       .select()
       .single()
     if (error) return setError(error.message)
@@ -176,14 +202,18 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
 
   const send = (e?: FormEvent) => {
     e?.preventDefault()
-    void post(null)
+    void post()
   }
 
-  // The current draft goes along as the image caption.
-  const sendImage = async (file: File) => {
+  // Images go to the image bucket (shrunk, shown inline), anything else to the file bucket. The draft is the caption.
+  const attach = async (file: File) => {
     setUploading(true)
     try {
-      await post(await uploadImage(ws.id, file))
+      if (file.type.startsWith('image/')) await post({ image_path: await uploadImage(ws.id, file) })
+      else {
+        const f = await uploadFile(ws.id, file)
+        await post({ file_path: f.path, file_name: f.name, file_size: f.size })
+      }
     } catch (err) {
       setError((err as Error).message)
     }
@@ -191,19 +221,24 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
   }
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
-    const file = [...e.clipboardData.files].find((f) => f.type.startsWith('image/'))
+    const file = e.clipboardData.files[0]
     if (file) {
       e.preventDefault()
-      void sendImage(file)
+      void attach(file)
     }
   }
 
   const onDrop = (e: DragEvent) => {
-    const file = [...e.dataTransfer.files].find((f) => f.type.startsWith('image/'))
+    const file = e.dataTransfer.files[0]
     setDragOver(false)
     if (!file) return
     e.preventDefault()
-    void sendImage(file)
+    void attach(file)
+  }
+
+  const togglePin = async (m: Message) => {
+    const { error } = await supabase.rpc('set_pinned', { msg: m.id, pinned: !m.pinned_at })
+    if (error) setError(error.message)
   }
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -226,6 +261,7 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
     if (error) return setError(error.message)
     setMessages((prev) => prev.filter((x) => x.id !== m.id))
     if (m.image_path) void removeIfUnused([m.image_path])
+    if (m.file_path) void removeFilesIfUnused([m.file_path])
   }
 
   const toggleReaction = async (m: Message, emoji: string) => {
@@ -256,8 +292,9 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
     const { error } = await supabase.from('cards').insert({
       list_id: first.id,
       workspace_id: ws.id,
-      title: m.body.slice(0, 200) || 'Image',
+      title: m.body.slice(0, 200) || m.file_name || 'Image',
       image_paths: m.image_path ? [m.image_path] : [],
+      attachments: m.file_path ? [{ path: m.file_path, name: m.file_name ?? 'file', size: m.file_size ?? 0 }] : [],
       position: generateKeyBetween(last, null),
       source_message_id: m.id,
     })
@@ -266,15 +303,12 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
 
   const jumpTo = (id: string) => document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 
-  // @mention suggestions for the word being typed at the end of the draft.
   const myName = names.get(me)
-  const mention = draft.match(/(?:^|\s)@([^@\n]{0,30})$/)
-  const suggestions = mention
-    ? [...new Set(names.values())].filter((n) => n.toLowerCase().startsWith(mention[1].toLowerCase()) && n !== mention[1]).slice(0, 5)
-    : []
-  const insertMention = (name: string) => setDraft(draft.slice(0, draft.length - mention![1].length) + name + ' ')
+  const mentions = useMentions(draft, setDraft, names.values())
 
-  const snippet = (m: Message) => m.body.slice(0, 80) || (m.image_path ? 'Image' : m.card_id ? 'Card' : '')
+  const snippet = (m: Message) => m.body.slice(0, 80) || (m.image_path ? 'Image' : m.file_name ?? (m.card_id ? 'Card' : ''))
+  // First message from someone else since the last visit gets the "New messages" divider.
+  const firstUnread = readMark ? messages.findIndex((m) => m.created_at > readMark && m.user_id !== me) : -1
 
   const renderMessage = (m: Message, prev: Message | undefined, actions: boolean) => {
     const name = names.get(m.user_id) ?? 'Former member'
@@ -286,7 +320,7 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
       return { emoji, count: who.length, mine: who.some((r) => r.user_id === me), names: who.map((r) => names.get(r.user_id) ?? 'Someone') }
     }).filter((c) => c.count > 0)
     return (
-      <article key={m.id} id={actions ? `msg-${m.id}` : undefined} className={`message ${grouped ? 'grouped' : ''} ${mentionsMe ? 'mentioned' : ''}`}>
+      <article key={m.id} id={actions ? `msg-${m.id}` : undefined} className={`message ${grouped ? 'grouped' : ''} ${mentionsMe ? 'mentioned' : ''} ${m.pinned_at ? 'pinned' : ''}`}>
         <div className="message-gutter">{!grouped && <Avatar name={name} id={m.user_id} />}</div>
         <div className="message-main">
           {!grouped && (
@@ -322,6 +356,7 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
             )
           )}
           {m.image_path && <StoredImage path={m.image_path} alt={`Image from ${name}`} />}
+          {m.file_path && <FileChip file={{ path: m.file_path, name: m.file_name ?? 'file', size: m.file_size ?? 0 }} />}
           {m.card_id && (
             <button className="card-link" onClick={() => onOpenCard(m.card_id!)}>
               <Icon name="card" />
@@ -329,7 +364,7 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
               <span className="muted small">Open</span>
             </button>
           )}
-          {!m.body && !m.image_path && !m.card_id && <p className="muted small">Shared a card that was deleted.</p>}
+          {!m.body && !m.image_path && !m.card_id && !m.file_path && <p className="muted small">Shared a card that was deleted.</p>}
           {counts.length > 0 && (
             <div className="reactions">
               {counts.map((c) => (
@@ -355,6 +390,9 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
             </button>
             <button className="btn ghost icon-btn small" title="Reply" onClick={() => startReply(m)}>
               <Icon name="reply" /><span className="visually-hidden">Reply</span>
+            </button>
+            <button className="btn ghost icon-btn small" title={m.pinned_at ? 'Unpin' : 'Pin'} aria-pressed={!!m.pinned_at} onClick={() => togglePin(m)}>
+              <Icon name="pin" /><span className="visually-hidden">{m.pinned_at ? 'Unpin' : 'Pin'}</span>
             </button>
             <button className="btn ghost icon-btn small" title="Make card" onClick={() => makeCard(m)}>
               <Icon name="card" /><span className="visually-hidden">Make card</span>
@@ -390,6 +428,27 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
       onDragLeave={(e) => e.currentTarget === e.target && setDragOver(false)}
       onDrop={onDrop}
     >
+      {pinned.length > 0 && (
+        <div className="pins">
+          <button className="pins-toggle" aria-expanded={showPins} onClick={() => setShowPins(!showPins)}>
+            <Icon name="pin" />
+            <span className="grow"><strong>{pinned.length} pinned</strong> <span className="muted">{snippet(pinned[0])}</span></span>
+            <Icon name={showPins ? 'up' : 'down'} />
+          </button>
+          {showPins && (
+            <ul className="plain pins-list">
+              {pinned.map((p) => (
+                <li key={p.id}>
+                  <button className="link-row" onClick={() => jumpTo(p.id)}>
+                    <strong>{names.get(p.user_id) ?? 'Former member'}</strong> {snippet(p)}
+                  </button>
+                  <button className="btn ghost small" onClick={() => togglePin(p)}>Unpin</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       <form className="chat-search" role="search" onSubmit={search}>
         <Icon name="search" />
         <input type="search" aria-label="Search messages" placeholder="Search messages" value={query}
@@ -421,7 +480,12 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
               <p>No messages yet. Say hi.</p>
             </div>
           )}
-          {messages.map((m, i) => renderMessage(m, messages[i - 1], true))}
+          {messages.map((m, i) => (
+            <Fragment key={m.id}>
+              {i === firstUnread && <div className="new-divider"><span>New messages</span></div>}
+              {renderMessage(m, i === firstUnread ? undefined : messages[i - 1], true)}
+            </Fragment>
+          ))}
         </div>
       )}
       <p className="typing muted small" aria-live="polite">
@@ -438,18 +502,17 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard }: {
         </div>
       )}
       <form className="composer" onSubmit={send}>
-        {suggestions.length > 0 && (
-          <div className="mentions" aria-label="Mention someone">
-            {suggestions.map((n) => (
-              <button type="button" key={n} onClick={() => insertMention(n)}>@{n}</button>
-            ))}
-          </div>
-        )}
-        <ImagePicker iconOnly label={uploading ? 'Uploading...' : 'Send an image'} disabled={uploading} onPick={sendImage} />
+        <MentionList {...mentions} />
+        <label className={`btn icon-btn ${uploading ? 'disabled' : ''}`} title={uploading ? 'Uploading...' : 'Attach an image or file'}>
+          <Icon name="paperclip" />
+          <span className="visually-hidden">{uploading ? 'Uploading...' : 'Attach an image or file'}</span>
+          <input type="file" accept={`image/*,${FILE_ACCEPT}`} className="visually-hidden" disabled={uploading}
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void attach(f) }} />
+        </label>
         <textarea
           ref={composer}
           aria-label="Message"
-          placeholder="Message, @ to mention, paste an image"
+          placeholder="Message, @ to mention, paste or drop files"
           rows={1}
           maxLength={4000}
           value={draft}

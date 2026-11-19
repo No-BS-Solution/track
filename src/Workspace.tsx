@@ -8,6 +8,9 @@ import { enableNotifications } from './push'
 import { removeAllUnused, removeFolder } from './Images'
 import { Avatar, Icon, Logo } from './Icon'
 import { usePresence } from './presence'
+import { ThemeToggle } from './theme'
+import { removeAllUnusedFiles } from './Files'
+import { exportWorkspace } from './exportWorkspace'
 
 type Usage = { db_bytes: number; file_bytes: number }
 const percent = (u: Usage) => ({
@@ -16,7 +19,7 @@ const percent = (u: Usage) => ({
 })
 const mb = (bytes: number) => `${(bytes / 1024 ** 2).toFixed(bytes < 10 * 1024 ** 2 ? 1 : 0)} MB`
 
-export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: string }) {
+export function WorkspaceView({ workspaceId, cardId, me }: { workspaceId: string; cardId: string | null; me: string }) {
   const [ws, setWs] = useState<Workspace | null | undefined>(undefined)
   const [members, setMembers] = useState<Member[]>([])
   const [usage, setUsage] = useState<Usage | null>(null)
@@ -39,6 +42,13 @@ export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: st
   }, [workspaceId])
 
   useEffect(() => void load(), [load])
+
+  // A comment notification links straight to its card.
+  useEffect(() => {
+    if (!cardId) return
+    setOpenCard(cardId)
+    setTab('board')
+  }, [cardId])
 
   if (ws === undefined) return <p className="center muted">Loading...</p>
   if (ws === null)
@@ -77,6 +87,7 @@ export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: st
               <Icon name="bell" /> <span className="hide-sm">Notifications</span>
             </button>
           )}
+          <ThemeToggle />
           <button className="btn ghost icon-btn" onClick={() => setSettings(true)} title="Workspace settings">
             <Icon name="settings" />
             <span className="visually-hidden">Workspace settings</span>
@@ -98,7 +109,7 @@ export function WorkspaceView({ workspaceId, me }: { workspaceId: string; me: st
         <button aria-pressed={tab === 'board'} onClick={() => setTab('board')}><Icon name="board" /> Board</button>
       </nav>
       <div className={`panes show-${tab}`}>
-        <Chat ws={ws} me={me} names={names} typing={presence.typing} setTyping={presence.setTyping}
+        <Chat ws={ws} me={me} names={names} typing={presence.typing} lastReadAt={members.find((m) => m.user_id === me)?.last_read_at ?? null} setTyping={presence.setTyping}
           onOpenCard={(id) => { setOpenCard(id); setTab('board') }} />
         <Board ws={ws} me={me} members={members} openCard={openCard} onOpenCard={setOpenCard} />
       </div>
@@ -150,8 +161,8 @@ function Settings({ ws, me, isOwner, members, online, usage, onClose, onChange }
     const { data, error } = await supabase.rpc('delete_history_before', { ws: ws.id, before })
     if (error) setError(error.message)
     else {
-      const files = await removeAllUnused(ws.id).catch(() => 0)
-      setStatus(`Deleted ${data} messages and ${files} image files.`)
+      const files = (await removeAllUnused(ws.id).catch(() => 0)) + (await removeAllUnusedFiles(ws.id).catch(() => 0))
+      setStatus(`Deleted ${data} messages and ${files} files.`)
       await onChange()
     }
     setBusy(false)
@@ -161,7 +172,7 @@ function Settings({ ws, me, isOwner, members, online, usage, onClose, onChange }
     setBusy(true)
     setStatus('')
     try {
-      setStatus(`Deleted ${await removeAllUnused(ws.id)} unused image files.`)
+      setStatus(`Deleted ${(await removeAllUnused(ws.id)) + (await removeAllUnusedFiles(ws.id))} unused files.`)
       await onChange()
     } catch (e) {
       setError((e as Error).message)
@@ -256,14 +267,26 @@ function Settings({ ws, me, isOwner, members, online, usage, onClose, onChange }
                       ))}
                     </select>
                   </label>
-                  <button className="btn danger" disabled={busy} onClick={deleteHistory}>Delete messages and images</button>
+                  <button className="btn danger" disabled={busy} onClick={deleteHistory}>Delete messages and files</button>
                 </div>
-                <button className="btn ghost" disabled={busy} onClick={cleanUnused}>Remove unused image files</button>
+                <button className="btn ghost" disabled={busy} onClick={cleanUnused}>Remove unused files</button>
               </>
             )}
             {status && <p className="muted small" role="status">{status}</p>}
           </section>
         )}
+
+        <section className="stack">
+          <h3>Export</h3>
+          <p className="muted small">Download all messages, cards, comments and labels as a JSON file. Images and files are listed by name, not included.</p>
+          <button className="btn" disabled={busy} onClick={async () => {
+            setBusy(true)
+            await exportWorkspace(ws, members).catch((e: Error) => setError(e.message))
+            setBusy(false)
+          }}>
+            <Icon name="download" /> Export workspace
+          </button>
+        </section>
 
         <section className="row danger-zone">
           {(!isOwner || owners > 1) && (
@@ -274,7 +297,8 @@ function Settings({ ws, me, isOwner, members, online, usage, onClose, onChange }
           {isOwner && (
             <button className="btn danger" onClick={async () => {
               if (!confirm(`Delete "${ws.name}" with all messages, cards and images? This cannot be undone.`)) return
-              await removeFolder(ws.id).catch(() => {})
+              await removeFolder(ws.id, 'images').catch(() => {})
+              await removeFolder(ws.id, 'files').catch(() => {})
               await run(supabase.from('workspaces').delete().eq('id', ws.id), leaveTo)
             }}>
               <Icon name="trash" /> Delete workspace

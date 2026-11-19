@@ -79,12 +79,12 @@ export async function removeAllUnused(workspaceId: string): Promise<number> {
 }
 
 /** Deletes every file in the workspace folder. Run before deleting a workspace, while its owner still has access. */
-export async function removeFolder(workspaceId: string): Promise<void> {
+export async function removeFolder(workspaceId: string, bucket: 'images' | 'files'): Promise<void> {
   for (;;) {
-    const { data, error } = await supabase.storage.from('images').list(workspaceId, { limit: 1000 })
+    const { data, error } = await supabase.storage.from(bucket).list(workspaceId, { limit: 1000 })
     if (error) throw error
     if (data.length === 0) return
-    const { data: removed } = await supabase.storage.from('images').remove(data.map((f) => `${workspaceId}/${f.name}`))
+    const { data: removed } = await supabase.storage.from(bucket).remove(data.map((f) => `${workspaceId}/${f.name}`))
     if (!removed?.length) return
   }
 }

@@ -3,7 +3,9 @@ import { draggable, dropTargetForElements, monitorForElements } from '@atlaskit/
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine'
 import { announce } from '@atlaskit/pragmatic-drag-and-drop-live-region'
 import { generateKeyBetween } from 'fractional-indexing'
-import { formatTime, supabase, upsert, type Card, type ChecklistItem, type Comment, type List, type Member, type Message, type Workspace } from './supabase'
+import { formatTime, supabase, upsert, LABEL_COLORS, type Card, type ChecklistItem, type Comment, type Label, type List, type Member, type Message, type Workspace } from './supabase'
+import { FILE_ACCEPT, FileChip, removeFilesIfUnused, uploadFile } from './Files'
+import { MentionList, useMentions } from './mentions'
 import { Modal } from './Modal'
 import { ImagePicker, StoredImage, removeIfUnused, uploadImage } from './Images'
 import { Avatar, Icon } from './Icon'
@@ -41,16 +43,21 @@ export function Board({ ws, me, members, openCard, onOpenCard }: {
   const [filter, setFilter] = useState<'all' | 'mine' | 'overdue'>('all')
   const [search, setSearch] = useState('')
   const [showArchived, setShowArchived] = useState(false)
+  const [labels, setLabels] = useState<Label[]>([])
+  const [labelFilter, setLabelFilter] = useState('')
+  const [manageLabels, setManageLabels] = useState(false)
   const [newList, setNewList] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
 
   const load = async () => {
-    const [l, c] = await Promise.all([
+    const [l, c, lb] = await Promise.all([
       supabase.from('lists').select('*').eq('workspace_id', ws.id),
       supabase.from('cards').select('*').eq('workspace_id', ws.id),
+      supabase.from('labels').select('*').eq('workspace_id', ws.id).order('name'),
     ])
     if (l.error || c.error) return setError((l.error ?? c.error)!.message)
+    setLabels((lb.data ?? []) as Label[])
     setLists(l.data as List[])
     setCards(c.data as Card[])
     setLoaded(true)
@@ -80,8 +87,10 @@ export function Board({ ws, me, members, openCard, onOpenCard }: {
   const cardsIn = (listId: string) => cards.filter((c) => c.list_id === listId && !c.archived_at).sort(byPosition)
   const today = new Date().toISOString().slice(0, 10)
   const term = search.trim().toLowerCase()
+  const labelMap = new Map(labels.map((l) => [l.id, l]))
   const visible = (c: Card) =>
     (filter === 'all' || (filter === 'mine' ? c.assignee_id === me : !!c.due_date && c.due_date < today)) &&
+    (!labelFilter || c.label_ids.includes(labelFilter)) &&
     (!term || c.title.toLowerCase().includes(term) || c.description.toLowerCase().includes(term))
   const archived = cards.filter((c) => c.archived_at).sort((a, b) => b.archived_at!.localeCompare(a.archived_at!))
 
@@ -208,6 +217,17 @@ export function Board({ ws, me, members, openCard, onOpenCard }: {
             <Icon name="search" />
             <input type="search" aria-label="Search cards" placeholder="Search cards" value={search} onChange={(e) => setSearch(e.target.value)} />
           </label>
+          {labels.length > 0 && (
+            <select className="label-filter" aria-label="Filter by label" value={labelFilter} onChange={(e) => setLabelFilter(e.target.value)}>
+              <option value="">All labels</option>
+              {labels.map((l) => (
+                <option key={l.id} value={l.id}>{l.name}</option>
+              ))}
+            </select>
+          )}
+          <button className="btn ghost small" onClick={() => setManageLabels(true)}>
+            <Icon name="tag" /> Labels
+          </button>
           <button className="btn ghost small" aria-pressed={showArchived} onClick={() => setShowArchived(!showArchived)}>
             <Icon name="archive" /> Archived ({archived.length})
           </button>
@@ -235,6 +255,7 @@ export function Board({ ws, me, members, openCard, onOpenCard }: {
               list={list}
               cards={cardsIn(list.id).filter(visible)}
               names={names}
+              labels={labelMap}
               canLeft={i > 0}
               canRight={i < sortedLists.length - 1}
               onMove={(dir) => moveList(list.id, i + dir)}
@@ -251,6 +272,7 @@ export function Board({ ws, me, members, openCard, onOpenCard }: {
         </div>
         </>
       )}
+      {manageLabels && <LabelManager workspaceId={ws.id} labels={labels} setLabels={setLabels} onClose={() => setManageLabels(false)} />}
       {card && (
         <CardEditor
           key={card.id}
@@ -260,6 +282,7 @@ export function Board({ ws, me, members, openCard, onOpenCard }: {
           count={cardsIn(card.list_id).length}
           members={members}
           names={names}
+          labels={labels}
           onMove={moveCard}
           me={me}
           onClose={() => onOpenCard(null)}
@@ -275,10 +298,11 @@ export function Board({ ws, me, members, openCard, onOpenCard }: {
   )
 }
 
-function ListColumn({ list, cards, names, canLeft, canRight, onMove, onRename, onDelete, onAddCard, onOpenCard }: {
+function ListColumn({ list, cards, names, labels, canLeft, canRight, onMove, onRename, onDelete, onAddCard, onOpenCard }: {
   list: List
   cards: Card[]
   names: Map<string, string>
+  labels: Map<string, Label>
   canLeft: boolean
   canRight: boolean
   onMove: (dir: -1 | 1) => void
@@ -353,7 +377,8 @@ function ListColumn({ list, cards, names, canLeft, canRight, onMove, onRename, o
       </div>
       <ul className="plain cards">
         {cards.map((c) => (
-          <CardItem key={c.id} card={c} assignee={c.assignee_id ? names.get(c.assignee_id) : undefined} onOpen={() => onOpenCard(c.id)} />
+          <CardItem key={c.id} card={c} assignee={c.assignee_id ? names.get(c.assignee_id) : undefined}
+            labels={c.label_ids.map((id) => labels.get(id)).filter((l): l is Label => !!l)} onOpen={() => onOpenCard(c.id)} />
         ))}
       </ul>
       <form className="add-card" onSubmit={add}>
@@ -363,7 +388,7 @@ function ListColumn({ list, cards, names, canLeft, canRight, onMove, onRename, o
   )
 }
 
-function CardItem({ card, assignee, onOpen }: { card: Card; assignee?: string; onOpen: () => void }) {
+function CardItem({ card, assignee, labels, onOpen }: { card: Card; assignee?: string; labels: Label[]; onOpen: () => void }) {
   const ref = useRef<HTMLLIElement>(null)
   const [dragging, setDragging] = useState(false)
   const [edge, setEdge] = useState<Edge>(null)
@@ -396,6 +421,13 @@ function CardItem({ card, assignee, onOpen }: { card: Card; assignee?: string; o
     <li ref={ref} className={`card ${dragging ? 'dragging' : ''} ${edge ? `drop-${edge}` : ''}`}>
       <button className="card-btn" onClick={onOpen}>
         {card.image_paths[0] && <StoredImage path={card.image_paths[0]} alt="" link={false} />}
+        {labels.length > 0 && (
+          <span className="card-labels">
+            {labels.map((l) => (
+              <span key={l.id} className={`label label-${l.color}`}>{l.name}</span>
+            ))}
+          </span>
+        )}
         <span className="card-title">{card.title}</span>
         <span className="card-meta">
           {card.due_date && <span className={`chip ${overdue ? 'overdue' : ''}`}><Icon name="calendar" />{card.due_date}</span>}
@@ -403,6 +435,7 @@ function CardItem({ card, assignee, onOpen }: { card: Card; assignee?: string; o
             <span className={`chip ${done === card.checklist.length ? 'complete' : ''}`}><Icon name="check" />{done}/{card.checklist.length}</span>
           )}
           {card.image_paths.length > 1 && <span className="chip"><Icon name="image" />{card.image_paths.length}</span>}
+          {card.attachments.length > 0 && <span className="chip"><Icon name="paperclip" />{card.attachments.length}</span>}
           {card.source_message_id && <span className="chip"><Icon name="chat" />chat</span>}
           {assignee && <span className="card-assignee" title={`Assigned to ${assignee}`}><Avatar name={assignee} id={card.assignee_id!} size={22} /></span>}
         </span>
@@ -411,7 +444,7 @@ function CardItem({ card, assignee, onOpen }: { card: Card; assignee?: string; o
   )
 }
 
-function CardEditor({ card, me, lists, index, count, members, names, onMove, onClose, onSaved, onDeleted }: {
+function CardEditor({ card, me, lists, index, count, members, names, labels, onMove, onClose, onSaved, onDeleted }: {
   card: Card
   me: string
   lists: List[]
@@ -419,6 +452,7 @@ function CardEditor({ card, me, lists, index, count, members, names, onMove, onC
   count: number
   members: Member[]
   names: Map<string, string>
+  labels: Label[]
   onMove: (id: string, listId: string, index: number) => void
   onClose: () => void
   onSaved: (c: Card) => void
@@ -459,7 +493,7 @@ function CardEditor({ card, me, lists, index, count, members, names, onMove, onC
   }
 
   // Images, checklist and comments save immediately; the form's Save button covers the text fields.
-  const patch = async (fields: Partial<Pick<Card, 'image_paths' | 'checklist' | 'archived_at'>>) => {
+  const patch = async (fields: Partial<Pick<Card, 'image_paths' | 'checklist' | 'archived_at' | 'attachments' | 'label_ids'>>) => {
     const { data, error } = await supabase.from('cards').update(fields).eq('id', card.id).select().single()
     if (error) return setError(error.message)
     onSaved(data as Card)
@@ -479,6 +513,26 @@ function CardEditor({ card, me, lists, index, count, members, names, onMove, onC
     await patch({ image_paths: card.image_paths.filter((x) => x !== path) })
     void removeIfUnused([path])
   }
+
+  const addFile = async (file: File) => {
+    setUploading(true)
+    try {
+      await patch({ attachments: [...card.attachments, await uploadFile(card.workspace_id, file)] })
+    } catch (err) {
+      setError((err as Error).message)
+    }
+    setUploading(false)
+  }
+
+  const removeFile = async (path: string) => {
+    await patch({ attachments: card.attachments.filter((a) => a.path !== path) })
+    void removeFilesIfUnused([path])
+  }
+
+  const toggleLabel = (id: string) =>
+    void patch({ label_ids: card.label_ids.includes(id) ? card.label_ids.filter((x) => x !== id) : [...card.label_ids, id] })
+
+  const commentMentions = useMentions(comment, setComment, names.values())
 
   const setChecklist = (checklist: ChecklistItem[]) => void patch({ checklist })
 
@@ -560,6 +614,22 @@ function CardEditor({ card, me, lists, index, count, members, names, onMove, onC
         </form>
 
         <section className="stack section">
+          <h3>Labels</h3>
+          {labels.length === 0 ? (
+            <p className="muted small">No labels yet. Add them from Labels in the board toolbar.</p>
+          ) : (
+            <div className="label-picker">
+              {labels.map((l) => (
+                <button key={l.id} type="button" className={`label label-${l.color} ${card.label_ids.includes(l.id) ? 'on' : 'off'}`}
+                  aria-pressed={card.label_ids.includes(l.id)} onClick={() => toggleLabel(l.id)}>
+                  {l.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="stack section">
           <h3>Checklist {card.checklist.length > 0 && <span className="muted small">{done}/{card.checklist.length}</span>}</h3>
           {card.checklist.length > 0 && (
             <ul className="plain checklist">
@@ -599,6 +669,19 @@ function CardEditor({ card, me, lists, index, count, members, names, onMove, onC
         </section>
 
         <section className="stack section">
+          <h3>Files</h3>
+          {card.attachments.map((a) => (
+            <FileChip key={a.path} file={a} onRemove={() => removeFile(a.path)} />
+          ))}
+          <label className={`btn ${uploading || card.attachments.length >= 20 ? 'disabled' : ''}`}>
+            <Icon name="paperclip" /> {uploading ? 'Uploading...' : 'Attach file'}
+            <input type="file" accept={FILE_ACCEPT} className="visually-hidden" disabled={uploading || card.attachments.length >= 20}
+              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void addFile(f) }} />
+          </label>
+          <p className="muted small">PDF, Office, OpenDocument, text, CSV, Markdown, JSON or ZIP, up to 10 MB.</p>
+        </section>
+
+        <section className="stack section">
           <h3>Comments</h3>
           {comments.map((c) => {
             const name = names.get(c.user_id) ?? 'Former member'
@@ -616,8 +699,9 @@ function CardEditor({ card, me, lists, index, count, members, names, onMove, onC
               </div>
             )
           })}
-          <form className="input-row" onSubmit={addComment}>
-            <input aria-label="New comment" placeholder="Write a comment" required maxLength={4000} value={comment} onChange={(e) => setComment(e.target.value)} />
+          <form className="input-row comment-form" onSubmit={addComment}>
+            <MentionList {...commentMentions} />
+            <input aria-label="New comment" placeholder="Write a comment, @ to mention" required maxLength={4000} value={comment} onChange={(e) => setComment(e.target.value)} />
             <button className="btn">Post</button>
           </form>
         </section>
@@ -660,6 +744,71 @@ function CardEditor({ card, me, lists, index, count, members, names, onMove, onC
             <button className="btn primary" form="card-form">Save</button>
           </span>
         </div>
+      </div>
+    </Modal>
+  )
+}
+
+function LabelManager({ workspaceId, labels, setLabels, onClose }: {
+  workspaceId: string
+  labels: Label[]
+  setLabels: (fn: (prev: Label[]) => Label[]) => void
+  onClose: () => void
+}) {
+  const [name, setName] = useState('')
+  const [color, setColor] = useState<Label['color']>('blue')
+  const [error, setError] = useState('')
+
+  const add = async (rows: { name: string; color: Label['color'] }[]) => {
+    const { data, error } = await supabase.from('labels').insert(rows.map((r) => ({ ...r, workspace_id: workspaceId }))).select()
+    if (error) return setError(error.message)
+    setLabels((p) => [...p, ...(data as Label[])].sort((a, b) => a.name.localeCompare(b.name)))
+  }
+
+  const update = async (l: Label, fields: Partial<Pick<Label, 'name' | 'color'>>) => {
+    setLabels((p) => p.map((x) => (x.id === l.id ? { ...x, ...fields } : x)))
+    const { error } = await supabase.from('labels').update(fields).eq('id', l.id)
+    if (error) setError(error.message)
+  }
+
+  const remove = async (l: Label) => {
+    if (!confirm(`Delete the label "${l.name}"? It disappears from all cards.`)) return
+    setLabels((p) => p.filter((x) => x.id !== l.id))
+    const { error } = await supabase.from('labels').delete().eq('id', l.id)
+    if (error) setError(error.message)
+  }
+
+  return (
+    <Modal title="Labels" onClose={onClose}>
+      <div className="stack">
+        {error && <p role="alert" className="notice" onClick={() => setError('')}>{error}</p>}
+        {labels.length === 0 && (
+          <button className="btn" onClick={() => add([{ name: 'Bug', color: 'red' }, { name: 'Design', color: 'purple' }, { name: 'Urgent', color: 'orange' }])}>
+            Add Bug, Design and Urgent
+          </button>
+        )}
+        <ul className="plain stack">
+          {labels.map((l) => (
+            <li key={l.id} className="input-row">
+              <span className={`label label-${l.color}`}>{l.name}</span>
+              <input aria-label="Label name" maxLength={30} defaultValue={l.name}
+                onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== l.name && update(l, { name: e.target.value.trim() })} />
+              <select aria-label="Label colour" value={l.color} onChange={(e) => update(l, { color: e.target.value as Label['color'] })}>
+                {LABEL_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <button className="btn ghost icon-btn small" title="Delete label" onClick={() => remove(l)}>
+                <Icon name="trash" /><span className="visually-hidden">Delete {l.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        <form className="input-row section" onSubmit={(e) => { e.preventDefault(); if (name.trim()) void add([{ name: name.trim(), color }]); setName('') }}>
+          <input aria-label="New label name" placeholder="New label, e.g. Backend" maxLength={30} value={name} onChange={(e) => setName(e.target.value)} />
+          <select aria-label="New label colour" value={color} onChange={(e) => setColor(e.target.value as Label['color'])}>
+            {LABEL_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <button className="btn primary">Add</button>
+        </form>
       </div>
     </Modal>
   )

@@ -36,12 +36,20 @@ export type Message = {
   image_path: string | null
   reply_to: string | null
   card_id: string | null
+  pinned_at: string | null
+  file_path: string | null
+  file_name: string | null
+  file_size: number | null
 }
 // Must match the check constraint on message_reactions.emoji.
 export const EMOJIS = ['👍', '❤️', '😂', '🎉', '👀', '✅'] as const
 export type Reaction = { message_id: string; user_id: string; emoji: string }
 export type List = { id: string; workspace_id: string; title: string; position: string }
 export type ChecklistItem = { text: string; done: boolean }
+export type Attachment = { path: string; name: string; size: number }
+// Must match the check constraint on labels.color.
+export const LABEL_COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'gray'] as const
+export type Label = { id: string; workspace_id: string; name: string; color: (typeof LABEL_COLORS)[number] }
 export type Card = {
   id: string
   list_id: string
@@ -55,6 +63,8 @@ export type Card = {
   image_paths: string[]
   checklist: ChecklistItem[]
   archived_at: string | null
+  label_ids: string[]
+  attachments: Attachment[]
   updated_at: string
 }
 export type Comment = { id: string; card_id: string; user_id: string; body: string; created_at: string }
