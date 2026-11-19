@@ -10,7 +10,7 @@ cleanupOutdatedCaches()
 self.addEventListener('install', () => void self.skipWaiting())
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
 
-type PushData = { title: string; body: string; url: string; tag: string }
+type PushData = { title: string; body: string; url: string; tag: string; call?: boolean }
 
 self.addEventListener('push', (event) => {
   const data = event.data?.json() as PushData | undefined
@@ -20,18 +20,29 @@ self.addEventListener('push', (event) => {
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
       // The open app already shows the message.
       if (windows.some((w) => w.focused && w.visibilityState === 'visible')) return
+      // `actions`, `vibrate` and `requireInteraction` are missing from some TS lib versions, hence the cast.
+      const call = data.call
+        ? {
+            actions: [{ action: 'answer', title: 'Answer' }, { action: 'decline', title: 'Decline' }],
+            requireInteraction: true,
+            vibrate: [400, 200, 400, 200, 400],
+          }
+        : {}
       await self.registration.showNotification(data.title, {
         body: data.body,
         tag: data.tag,
         icon: 'icon-192.png',
         data: { url: data.url },
-      })
+        ...call,
+      } as NotificationOptions)
     })(),
   )
 })
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
+  // Declining just stops the ringing; the caller sees "No answer" when nobody joins.
+  if (event.action === 'decline') return
   const url = new URL((event.notification.data as { url?: string } | null)?.url ?? '', self.registration.scope).href
   event.waitUntil(
     (async () => {

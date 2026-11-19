@@ -9,6 +9,7 @@ import { removeAllUnused, removeFolder } from './Images'
 import { Avatar, Icon, Logo } from './Icon'
 import { usePresence } from './presence'
 import { ThemeToggle } from './theme'
+import { CallView, startCall, useActiveCall } from './Call'
 import { removeAllUnusedFiles } from './Files'
 import { exportWorkspace } from './exportWorkspace'
 
@@ -19,7 +20,12 @@ const percent = (u: Usage) => ({
 })
 const mb = (bytes: number) => `${(bytes / 1024 ** 2).toFixed(bytes < 10 * 1024 ** 2 ? 1 : 0)} MB`
 
-export function WorkspaceView({ workspaceId, cardId, me }: { workspaceId: string; cardId: string | null; me: string }) {
+export function WorkspaceView({ workspaceId, cardId, callId, me }: {
+  workspaceId: string
+  cardId: string | null
+  callId: string | null
+  me: string
+}) {
   const [ws, setWs] = useState<Workspace | null | undefined>(undefined)
   const [members, setMembers] = useState<Member[]>([])
   const [usage, setUsage] = useState<Usage | null>(null)
@@ -27,6 +33,7 @@ export function WorkspaceView({ workspaceId, cardId, me }: { workspaceId: string
   const [settings, setSettings] = useState(false)
   const [openCard, setOpenCard] = useState<string | null>(null)
   const presence = usePresence(workspaceId, me)
+  const activeCall = useActiveCall(workspaceId)
   const [notify, setNotify] = useState(typeof Notification === 'undefined' ? 'denied' : Notification.permission)
   const install = useInstall()
 
@@ -87,6 +94,10 @@ export function WorkspaceView({ workspaceId, cardId, me }: { workspaceId: string
               <Icon name="bell" /> <span className="hide-sm">Notifications</span>
             </button>
           )}
+          <button className="btn icon-btn" title={activeCall ? 'Join call' : 'Start a call'}
+            onClick={() => (activeCall ? (location.hash = `#/w/${ws.id}/call/${activeCall.id}`) : startCall(ws.id).catch((e: Error) => alert(e.message)))}>
+            <Icon name="phone" /><span className="visually-hidden">{activeCall ? 'Join call' : 'Start a call'}</span>
+          </button>
           <ThemeToggle />
           <button className="btn ghost icon-btn" onClick={() => setSettings(true)} title="Workspace settings">
             <Icon name="settings" />
@@ -103,6 +114,15 @@ export function WorkspaceView({ workspaceId, cardId, me }: { workspaceId: string
             'The workspace owner can free up space in Settings.'
           )}
         </p>
+      )}
+      {activeCall && !callId && (
+        <p className="banner call-banner" role="status">
+          <Icon name="phone" /> {names.get(activeCall.started_by) ?? 'Someone'} started a call.{' '}
+          <a className="btn primary small" href={`#/w/${ws.id}/call/${activeCall.id}`}>Join</a>
+        </p>
+      )}
+      {callId && (
+        <CallView key={callId} ws={ws} callId={callId} me={me} names={names} onLeave={() => (location.hash = `#/w/${ws.id}`)} />
       )}
       <nav className="tabs" aria-label="View">
         <button aria-pressed={tab === 'chat'} onClick={() => setTab('chat')}><Icon name="chat" /> Chat</button>

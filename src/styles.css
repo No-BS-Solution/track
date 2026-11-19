@@ -460,3 +460,60 @@ progress.full::-moz-progress-bar { background: var(--danger); }
 
 .comment-form { position: relative; }
 .comment-form .mentions { left: 0; }
+
+/* Calls: always dark, like a phone call screen */
+.call {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+  background: #0b0d12; color: #e8ebf1;
+}
+.call .muted { color: #9aa1ad; }
+.call-head { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 14px 16px 6px; }
+.tiles { flex: 1; min-height: 0; display: grid; gap: 10px; padding: 10px 14px; grid-template-columns: 1fr; grid-auto-rows: 1fr; }
+.tiles.count-2 { grid-template-columns: 1fr; }
+.tiles.count-3, .tiles.count-4 { grid-template-columns: 1fr 1fr; }
+.tiles.count-5 { grid-template-columns: 1fr 1fr 1fr; }
+@media (min-width: 801px) {
+  .tiles.count-2 { grid-template-columns: 1fr 1fr; }
+}
+.tile {
+  position: relative; min-height: 0; display: flex; align-items: center; justify-content: center;
+  background: #171a22; border-radius: 16px; overflow: hidden;
+}
+.tile video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.tile.sharing video { object-fit: contain; background: #000; }
+/* Hidden but still playing, so remote audio continues with the camera off. */
+.tile video.video-off { opacity: 0; }
+.tile .avatar { position: relative; }
+.tile-name {
+  position: absolute; left: 10px; bottom: 10px; display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; background: rgb(0 0 0 / 0.55); font-size: 0.85rem; font-weight: 600;
+}
+.tile-name .icon { width: 14px; height: 14px; color: #ff6b6b; }
+.call-controls { display: flex; justify-content: center; gap: 14px; padding: 14px 16px calc(18px + env(safe-area-inset-bottom)); }
+.call-btn { width: 56px; height: 56px; padding: 0; border-radius: 50%; border: 0; background: #2a2f3b; color: #fff; }
+.call-btn:hover:not(:disabled) { background: #363c4a; }
+.call-btn .icon { width: 24px; height: 24px; }
+.call-btn.off { background: #e8ebf1; color: #0b0d12; }
+.call-btn.off:hover:not(:disabled) { background: #fff; }
+.call-btn.active { background: #2f6fed; }
+.call-btn.decline, .call-btn.decline:hover:not(:disabled) { background: #e5484d; color: #fff; }
+.call-btn.answer, .call-btn.answer:hover:not(:disabled) { background: #30a46c; color: #fff; }
+.call .toast { margin: 0 14px; }
+.unblock { align-self: center; margin-top: 8px; }
+.call-ended { margin: auto; align-items: center; text-align: center; }
+.call-ended .icon { width: 40px; height: 40px; color: #e5484d; }
+.call-banner { display: flex; align-items: center; justify-content: center; gap: 8px; background: var(--success-soft); color: var(--success); }
+.call-banner .icon { width: 16px; height: 16px; }
+.call-banner .btn { color: var(--accent-text); }
+
+/* Incoming call, shown above everything */
+.incoming-call {
+  position: fixed; z-index: 60; left: 50%; top: 16px; transform: translateX(-50%);
+  width: min(420px, calc(100vw - 24px)); display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+  background: #161920; color: #e8ebf1; border-radius: 18px; box-shadow: var(--shadow-lg);
+  animation: ring-in 0.25s ease-out;
+}
+.incoming-call .muted { color: #9aa1ad; }
+.incoming-call .call-btn { width: 48px; height: 48px; flex-shrink: 0; }
+@keyframes ring-in { from { transform: translate(-50%, -20px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .incoming-call { animation: none; } }

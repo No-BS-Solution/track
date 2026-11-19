@@ -17,19 +17,21 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST' || req.headers.get('x-push-secret') !== Deno.env.get('PUSH_SECRET')) {
     return new Response('forbidden', { status: 403 })
   }
-  const { subscriptions, body, url, tag } = (await req.json()) as {
+  const { subscriptions, body, url, tag, call } = (await req.json()) as {
     subscriptions: Subscription[]
     body: string
     url: string
     tag: string
+    call?: boolean
   }
   const targets = subscriptions.filter((s) => PUSH_HOSTS.some((h) => h.test(new URL(s.endpoint).hostname)))
   const results = await Promise.allSettled(
     targets.map((s) =>
       webpush.sendNotification(
         { endpoint: s.endpoint, keys: s.keys },
-        JSON.stringify({ title: s.title, body, url, tag }),
-        { TTL: 60 * 60 * 24 },
+        JSON.stringify({ title: s.title, body, url, tag, call: !!call }),
+        // A call is only worth ringing for a minute; messages can wait a day.
+        { TTL: call ? 60 : 60 * 60 * 24, urgency: call ? 'high' : 'normal' },
       ),
     ),
   )
