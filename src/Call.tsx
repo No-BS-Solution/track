@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import type { RealtimeChannel } from '@supabase/supabase-js'
+import type { RealtimeChannel, RealtimeChannelOptions } from '@supabase/supabase-js'
 import { supabase, type Workspace } from './supabase'
 import { Avatar, Icon } from './Icon'
 
 // Public STUN only. shortcut: no TURN relay, so a few strict networks (some mobile carriers, office
 // firewalls) cannot connect; add TURN credentials here if that happens.
 const ICE: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }]
-const NO_ANSWER_MS = 60_000
+// Ring this long; a call where you've been alone this long ends.
+const TIMEOUT_MS = 60_000
 
 export type Call = { id: string; workspace_id: string; started_by: string; created_at: string; ended_at: string | null }
 type MediaState = { mic: boolean; cam: boolean; screen: boolean }
@@ -14,8 +15,18 @@ type Signal =
   | { kind: 'offer' | 'answer'; sdp: RTCSessionDescriptionInit }
   | { kind: 'ice'; candidate: RTCIceCandidateInit }
   | ({ kind: 'state' } & MediaState)
-// `to` is a user id, or '*' for everyone in the call.
+// Peers are device sessions ("<user id>:<random>") so one person can be on two devices. `to` may be '*'.
 type Envelope = Signal & { from: string; to: string }
+const userOf = (session: string) => session.split(':')[0]
+
+/**
+ * supabase-js hands back the existing channel when a topic is reused, and drops channels by topic.
+ * So wait for any old channel on the topic (e.g. one still closing after leaving a call) to go first.
+ */
+async function freshChannel(topic: string, params: RealtimeChannelOptions): Promise<RealtimeChannel> {
+  for (const c of supabase.getChannels()) if (c.topic === `realtime:${topic}`) await supabase.removeChannel(c)
+  return supabase.channel(topic, params)
+}
 
 export async function startCall(workspaceId: string): Promise<void> {
   const { data, error } = await supabase.from('calls').insert({ workspace_id: workspaceId }).select().single()
@@ -27,7 +38,7 @@ export async function startCall(workspaceId: string): Promise<void> {
 export function useActiveCall(workspaceId: string): Call | null {
   const [call, setCall] = useState<Call | null>(null)
   useEffect(() => {
-    // Calls whose last person crashed never get ended_at, so ignore old ones.
+    // A call whose last person crashed never gets ended_at, so ignore old ones.
     const recent = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString()
     supabase.from('calls').select('*').eq('workspace_id', workspaceId).is('ended_at', null).gt('created_at', recent)
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
@@ -75,6 +86,17 @@ function ring(): () => void {
   }
 }
 
+// When one of my devices answers, it tells my other devices to stop ringing on this topic.
+const ringTopic = (call: Pick<Call, 'id' | 'workspace_id'>) => `ring:${call.workspace_id}:${call.id}`
+
+async function announceAnswered(call: Pick<Call, 'id' | 'workspace_id'>, me: string) {
+  const ch = await freshChannel(ringTopic(call), { config: { private: true } })
+  ch.subscribe((status) => {
+    if (status !== 'SUBSCRIBED') return
+    void ch.send({ type: 'broadcast', event: 'answered', payload: { user: me } }).finally(() => supabase.removeChannel(ch))
+  })
+}
+
 /** Rings inside the app when a call starts in any of the user's workspaces. */
 export function IncomingCall({ me }: { me: string }) {
   const [ringing, setRinging] = useState<{ call: Call; caller: string; workspace: string } | null>(null)
@@ -100,19 +122,30 @@ export function IncomingCall({ me }: { me: string }) {
 
   useEffect(() => {
     if (!ringing) return
+    const { call } = ringing
     const stop = ring()
-    const timeout = setTimeout(() => setRinging(null), NO_ANSWER_MS)
+    const timeout = setTimeout(() => setRinging(null), TIMEOUT_MS)
+    // Stop when this device opens the call (any way, not just the Answer button)...
+    const onHash = () => location.hash.includes(call.id) && setRinging(null)
+    addEventListener('hashchange', onHash)
+    // ...or when another of my devices answers.
+    let answered: RealtimeChannel | null = null
+    let cancelled = false
+    void freshChannel(ringTopic(call), { config: { private: true } }).then((c) => {
+      if (cancelled) return
+      answered = c
+      c.on('broadcast', { event: 'answered' }, ({ payload }) => payload?.user === me && setRinging(null)).subscribe()
+    })
     return () => {
+      cancelled = true
       stop()
       clearTimeout(timeout)
+      removeEventListener('hashchange', onHash)
+      if (answered) void supabase.removeChannel(answered)
     }
-  }, [ringing])
+  }, [ringing, me])
 
   if (!ringing) return null
-  const answer = () => {
-    location.hash = `#/w/${ringing.call.workspace_id}/call/${ringing.call.id}`
-    setRinging(null)
-  }
   return (
     <div className="incoming-call" role="alertdialog" aria-label={`${ringing.caller} is calling`}>
       <Avatar name={ringing.caller} id={ringing.call.started_by} size={48} />
@@ -123,7 +156,7 @@ export function IncomingCall({ me }: { me: string }) {
       <button className="btn call-btn decline" onClick={() => setRinging(null)} title="Decline">
         <Icon name="phoneOff" /><span className="visually-hidden">Decline</span>
       </button>
-      <button className="btn call-btn answer" onClick={answer} title="Answer">
+      <button className="btn call-btn answer" onClick={() => (location.hash = `#/w/${ringing.call.workspace_id}/call/${ringing.call.id}`)} title="Answer">
         <Icon name="phone" /><span className="visually-hidden">Answer</span>
       </button>
     </div>
@@ -151,7 +184,7 @@ function Tile({ stream, name, id, state, self, onBlocked }: {
     <div className={`tile ${state.screen ? 'sharing' : ''}`}>
       {/* The element stays in the page while hidden so the remote audio keeps playing. */}
       <video ref={ref} autoPlay playsInline muted={self} className={showVideo ? '' : 'video-off'} />
-      {!showVideo && <Avatar name={name} id={id} size={72} />}
+      {!showVideo && <Avatar name={name} id={id} size={64} />}
       <span className="tile-name">
         {!state.mic && <Icon name="micOff" />}
         {name}{self ? ' (you)' : ''}{state.screen ? ' is sharing' : ''}
@@ -167,11 +200,13 @@ export function CallView({ ws, callId, me, names, onLeave }: {
   names: Map<string, string>
   onLeave: () => void
 }) {
+  const [session] = useState(() => `${me}:${crypto.randomUUID().slice(0, 8)}`)
   const [remote, setRemote] = useState<Record<string, MediaStream>>({})
   const [states, setStates] = useState<Record<string, MediaState>>({})
   const [others, setOthers] = useState<string[]>([])
   const [mine, setMine] = useState<MediaState>({ mic: true, cam: false, screen: false })
   const [selfStream, setSelfStream] = useState<MediaStream | null>(null)
+  const [mini, setMini] = useState(false)
   const [ended, setEnded] = useState('')
   const [error, setError] = useState('')
   const [blocked, setBlocked] = useState(false)
@@ -187,27 +222,28 @@ export function CallView({ ws, callId, me, names, onLeave }: {
   const mineRef = useRef(mine)
   mineRef.current = mine
   const anyoneJoined = useRef(false)
+  const lastCompany = useRef(Date.now())
   const namesRef = useRef(names)
   namesRef.current = names
 
   const send = (to: string, s: Signal) =>
-    void channel.current?.send({ type: 'broadcast', event: 'signal', payload: { ...s, from: me, to } satisfies Envelope })
+    void channel.current?.send({ type: 'broadcast', event: 'signal', payload: { ...s, from: session, to } satisfies Envelope })
   const currentVideo = () => tracks.current.screen ?? tracks.current.camera
   const videoSenders = () =>
     [...pcs.current.values()].flatMap((pc) => pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video').map((t) => t.sender))
+  const othersNow = () => Object.keys(channel.current?.presenceState() ?? {}).filter((k) => k !== session)
 
   const leave = async (reason?: string) => {
-    const left = Object.keys(channel.current?.presenceState() ?? {}).filter((k) => k !== me)
-    if (left.length === 0) await supabase.rpc('end_call', { call: callId })
+    if (othersNow().length === 0) await supabase.rpc('end_call', { call: callId })
     if (reason) setEnded(reason)
     else onLeave()
   }
+  const leaveRef = useRef(leave)
+  leaveRef.current = leave
 
   useEffect(() => {
     let closed = false
-    let noAnswer: number | undefined
-    const ch = supabase.channel(`call:${ws.id}:${callId}`, { config: { private: true, presence: { key: me }, broadcast: { self: false } } })
-    channel.current = ch
+    let ch: RealtimeChannel | null = null
 
     const connection = (peer: string) => {
       pcs.current.get(peer)?.close()
@@ -220,7 +256,7 @@ export function CallView({ ws, callId, me, names, onLeave }: {
       }
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'failed')
-          setError(`Couldn't connect to ${namesRef.current.get(peer) ?? 'someone'}. One of your networks may block direct calls.`)
+          setError(`Couldn't connect to ${namesRef.current.get(userOf(peer)) ?? 'someone'}. One of your networks may block direct calls.`)
       }
       pcs.current.set(peer, pc)
       return pc
@@ -245,9 +281,8 @@ export function CallView({ ws, callId, me, names, onLeave }: {
       send(peer, { kind: 'offer', sdp: pc.localDescription!.toJSON() })
     }
 
-    ch.on('broadcast', { event: 'signal' }, async ({ payload }) => {
-      const m = payload as Envelope
-      if (m.to !== me && m.to !== '*') return
+    const onSignal = async (m: Envelope) => {
+      if (m.to !== session && m.to !== '*') return
       const peer = m.from
       try {
         if (m.kind === 'offer') {
@@ -273,17 +308,21 @@ export function CallView({ ws, callId, me, names, onLeave }: {
       } catch (e) {
         console.warn('call signaling', e)
       }
-    })
+    }
 
-    ch.on('presence', { event: 'sync' }, () => {
-      const now = Object.keys(ch.presenceState()).filter((k) => k !== me)
+    const onSync = () => {
+      if (!ch) return
+      const now = Object.keys(ch.presenceState()).filter((k) => k !== session)
       setOthers(now)
-      if (now.length) anyoneJoined.current = true
+      if (now.length) {
+        anyoneJoined.current = true
+        lastCompany.current = Date.now()
+      }
       for (const peer of now) {
         if (greeted.current.has(peer)) continue
         greeted.current.add(peer)
-        // The lower id makes the offer, so two people never offer to each other at once.
-        if (me < peer) void offer(peer)
+        // The lower session id makes the offer, so two devices never offer to each other at once.
+        if (session < peer) void offer(peer)
         send(peer, { kind: 'state', ...mineRef.current })
       }
       for (const peer of [...greeted.current]) {
@@ -293,7 +332,13 @@ export function CallView({ ws, callId, me, names, onLeave }: {
         pcs.current.delete(peer)
         setRemote(({ [peer]: _, ...rest }) => rest)
       }
-    })
+    }
+
+    // Leave once nobody else has been here for a minute: "No answer" for a fresh call, otherwise everyone left.
+    const aloneCheck = window.setInterval(() => {
+      if (ch && othersNow().length === 0 && Date.now() - lastCompany.current > TIMEOUT_MS)
+        void leaveRef.current(anyoneJoined.current ? 'Everyone else left the call.' : 'No answer.')
+    }, 5000)
 
     void (async () => {
       const { data: call } = await supabase.from('calls').select('*').eq('id', callId).maybeSingle()
@@ -306,28 +351,39 @@ export function CallView({ ws, callId, me, names, onLeave }: {
         setError('Track could not use your microphone, so others cannot hear you. Allow it in your browser settings.')
         setMine((m) => ({ ...m, mic: false }))
       }
-      if (closed) return tracks.current.audio?.stop()
-      ch.subscribe((status) => {
-        if (status === 'SUBSCRIBED') void ch.track({ joined: Date.now() })
-        else if (status === 'CHANNEL_ERROR') setError('Could not join the call. Check your connection and try again.')
+      const fresh = await freshChannel(`call:${ws.id}:${callId}`, {
+        config: { private: true, presence: { key: session }, broadcast: { self: false } },
       })
-      if ((call as Call).started_by === me)
-        noAnswer = window.setTimeout(() => !anyoneJoined.current && void leave('No answer.'), NO_ANSWER_MS)
+      if (closed) {
+        tracks.current.audio?.stop()
+        return void supabase.removeChannel(fresh)
+      }
+      ch = fresh
+      channel.current = fresh
+      lastCompany.current = Date.now()
+      fresh
+        .on('broadcast', { event: 'signal' }, ({ payload }) => void onSignal(payload as Envelope))
+        .on('presence', { event: 'sync' }, onSync)
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') void fresh.track({ joined: Date.now() })
+          else if (status === 'CHANNEL_ERROR') setError('Could not join the call. Check your connection and try again.')
+        })
+      void announceAnswered(call as Call, me)
     })()
 
     return () => {
       closed = true
-      clearTimeout(noAnswer)
+      clearInterval(aloneCheck)
       for (const pc of pcs.current.values()) pc.close()
       pcs.current.clear()
       greeted.current.clear()
       for (const t of Object.values(tracks.current)) t?.stop()
       tracks.current = { audio: null, camera: null, screen: null }
       channel.current = null
-      void supabase.removeChannel(ch)
+      if (ch) void supabase.removeChannel(ch)
     }
     // Runs once per call; handlers read the latest values through refs.
-  }, [ws.id, callId, me])
+  }, [ws.id, callId, me, session])
 
   const update = (next: MediaState) => {
     setMine(next)
@@ -398,12 +454,15 @@ export function CallView({ ws, callId, me, names, onLeave }: {
     )
 
   return (
-    <div className="call" role="dialog" aria-label={`Call in ${ws.name}`}>
+    <div className={`call ${mini ? 'mini' : ''}`} role="dialog" aria-label={`Call in ${ws.name}`}>
       <header className="call-head">
-        <strong>{ws.name}</strong>
-        <span className="muted small">
-          {others.length === 0 ? 'Waiting for others to join...' : `${others.length + 1} in call`}
+        <span className="grow">
+          <strong>{ws.name}</strong>
+          <span className="muted small"> {others.length === 0 ? 'Waiting for others...' : `${others.length + 1} in call`}</span>
         </span>
+        <button className="btn call-btn small-btn" onClick={() => setMini(!mini)} title={mini ? 'Expand call' : 'Minimise call to use the board and chat'}>
+          <Icon name={mini ? 'up' : 'down'} /><span className="visually-hidden">{mini ? 'Expand call' : 'Minimise call'}</span>
+        </button>
       </header>
       {error && <p role="alert" className="notice toast" onClick={() => setError('')}>{error}</p>}
       {blocked && (
@@ -412,7 +471,7 @@ export function CallView({ ws, callId, me, names, onLeave }: {
       <div className={`tiles count-${Math.min(others.length + 1, 5)}`}>
         <Tile stream={selfStream} name={names.get(me) ?? 'You'} id={me} state={mine} self onBlocked={() => {}} />
         {others.map((peer) => (
-          <Tile key={peer} stream={remote[peer] ?? null} name={names.get(peer) ?? 'Someone'} id={peer}
+          <Tile key={peer} stream={remote[peer] ?? null} name={names.get(userOf(peer)) ?? 'Someone'} id={userOf(peer)}
             state={states[peer] ?? { mic: true, cam: false, screen: false }} onBlocked={() => setBlocked(true)} />
         ))}
       </div>

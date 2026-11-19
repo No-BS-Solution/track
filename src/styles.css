@@ -474,7 +474,7 @@ progress.full::-moz-progress-bar { background: var(--danger); }
   background: #0b0d12; color: #e8ebf1;
 }
 .call .muted { color: #9aa1ad; }
-.call-head { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 14px 16px 6px; }
+.call-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px 6px; }
 .tiles { flex: 1; min-height: 0; display: grid; gap: 10px; padding: 10px 14px; grid-template-columns: 1fr; grid-auto-rows: 1fr; }
 .tiles.count-2 { grid-template-columns: 1fr; }
 .tiles.count-3, .tiles.count-4 { grid-template-columns: 1fr 1fr; }
@@ -527,3 +527,22 @@ progress.full::-moz-progress-bar { background: var(--danger); }
 
 /* Read receipts */
 .seen { text-align: right; padding: 0 14px 4px; font-size: 0.78rem; }
+
+/* Minimised call: a floating panel so chat and board stay usable during the call */
+.call-btn.small-btn { width: 40px; height: 40px; }
+.call-btn.small-btn .icon { width: 20px; height: 20px; }
+.call.mini {
+  inset: auto 16px 16px auto; width: 320px; max-height: 60vh;
+  border-radius: 18px; box-shadow: 0 20px 50px rgb(0 0 0 / 0.45); overflow: hidden;
+}
+.call.mini .call-head { padding: 8px 8px 4px 14px; }
+.call.mini .tiles { flex: none; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); grid-auto-rows: 72px; gap: 6px; padding: 6px 10px; }
+.call.mini .tile { border-radius: 10px; }
+.call.mini .tile .avatar { transform: scale(0.55); }
+.call.mini .tile-name { left: 4px; bottom: 4px; padding: 1px 6px; font-size: 0.7rem; }
+.call.mini .call-controls { gap: 10px; padding: 8px 10px 12px; }
+.call.mini .call-controls .call-btn { width: 42px; height: 42px; }
+.call.mini .call-controls .call-btn .icon { width: 20px; height: 20px; }
+@media (max-width: 600px) {
+  .call.mini { left: 8px; right: 8px; bottom: 8px; width: auto; }
+}
