@@ -27,6 +27,7 @@ const saveFlag = (key: string, on: boolean) => {
 const ICE: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }]
 // Ring this long; a call where you've been alone this long ends.
 const TIMEOUT_MS = 60_000
+const MIC: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true }
 
 export type Call = { id: string; workspace_id: string; started_by: string; created_at: string; ended_at: string | null }
 type MediaState = { mic: boolean; cam: boolean; screen: boolean }
@@ -260,8 +261,9 @@ export function CallView({ ws, callId, me, names, onLeave }: {
   const send = (to: string, s: Signal) =>
     void channel.current?.send({ type: 'broadcast', event: 'signal', payload: { ...s, from: session, to } satisfies Envelope })
   const currentVideo = () => tracks.current.screen ?? flipped.current?.track ?? blurred.current?.track ?? tracks.current.camera
-  const videoSenders = () =>
-    [...pcs.current.values()].flatMap((pc) => pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video').map((t) => t.sender))
+  const senders = (kind: 'audio' | 'video') =>
+    [...pcs.current.values()].flatMap((pc) => pc.getTransceivers().filter((t) => t.receiver.track.kind === kind).map((t) => t.sender))
+  const videoSenders = () => senders('video')
   const othersNow = () => Object.keys(channel.current?.presenceState() ?? {}).filter((k) => k !== session)
 
   const leave = async (reason?: string) => {
@@ -376,7 +378,7 @@ export function CallView({ ws, callId, me, names, onLeave }: {
       if (closed) return
       if (!call || (call as Call).ended_at) return setEnded('This call has ended.')
       try {
-        const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+        const s = await navigator.mediaDevices.getUserMedia({ audio: MIC })
         tracks.current.audio = s.getAudioTracks()[0]
       } catch {
         setError('Track could not use your microphone, so others cannot hear you. Allow it in your browser settings.')
@@ -478,8 +480,20 @@ export function CallView({ ws, callId, me, names, onLeave }: {
       tracks.current.camera = null
     } else {
       try {
-        const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } })
+        const old = tracks.current.audio
+        const s = await navigator.mediaDevices.getUserMedia({
+          audio: old ? MIC : false,
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        })
         tracks.current.camera = s.getVideoTracks()[0]
+        // iOS Safari (and some Android phones) silence the earlier mic track when the camera opens, so swap in the fresh one.
+        const mic = s.getAudioTracks()[0]
+        if (old && mic) {
+          mic.enabled = old.enabled
+          old.stop()
+          tracks.current.audio = mic
+          for (const sender of senders('audio')) void sender.replaceTrack(mic)
+        }
       } catch {
         return setError('Track could not use your camera. Allow it in your browser settings.')
       }

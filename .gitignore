@@ -7,3 +7,4 @@ dev-dist
 *.log
 .claude/settings.local.json*
 public/mediapipe
+*.tsbuildinfo

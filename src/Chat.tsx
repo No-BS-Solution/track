@@ -49,6 +49,8 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
   const typingSent = useRef(0)
   const namesRef = useRef(names)
   namesRef.current = names
+  const newest = useRef<string | undefined>(undefined)
+  newest.current = messages.at(-1)?.created_at
 
   const loadReactions = async (ids: string[]) => {
     if (ids.length === 0) return
@@ -107,6 +109,16 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
     const onReturn = () => !document.hidden && void loadLatest()
     document.addEventListener('visibilitychange', onReturn)
     window.addEventListener('online', onReturn)
+    // A socket can die without the client noticing (sleep, Wi-Fi switch), so also check for new messages while the tab is open.
+    const loadNewer = async () => {
+      const last = newest.current
+      if (!last) return loadLatest()
+      const { data } = await supabase.from('messages').select('*').eq('workspace_id', ws.id).gt('created_at', last).order('created_at')
+      if (!data?.length) return
+      setMessages((prev) => (data as Message[]).reduce(upsert, prev))
+      void loadReactions((data as Message[]).map((m) => m.id))
+    }
+    const poll = window.setInterval(() => !document.hidden && void loadNewer(), 10_000)
     supabase
       .from('messages')
       .select('*')
@@ -116,6 +128,7 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
       .limit(20)
       .then(({ data }) => data && setPinned(data as Message[]))
     return () => {
+      clearInterval(poll)
       document.removeEventListener('visibilitychange', onReturn)
       window.removeEventListener('online', onReturn)
       void supabase.removeChannel(channel)

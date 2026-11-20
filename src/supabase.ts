@@ -4,6 +4,8 @@ import { createClient } from '@supabase/supabase-js'
 export const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
   // PKCE puts the email-link result in ?code= instead of the #fragment, which hash routing needs.
   auth: { flowType: 'pkce' },
+  // Heartbeats in a worker keep running when the browser throttles timers in a background tab, so a dead socket gets noticed and reconnected.
+  realtime: { worker: true },
 })
 
 // Registered right after createClient so it sees the event fired while the reset link's code is exchanged.
