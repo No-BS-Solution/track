@@ -2,14 +2,23 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import type { RealtimeChannel, RealtimeChannelOptions } from '@supabase/supabase-js'
 import { supabase, type Workspace } from './supabase'
 import { Avatar, Icon } from './Icon'
-import { blurSupported, blurTrack, type Blurred } from './blur'
+import { blurSupported, blurTrack, flipTrack, type Blurred } from './blur'
 
 const BLUR_KEY = 'track-blur'
-const readBlur = () => {
+const MIRROR_KEY = 'track-mirror-self'
+const FLIP_KEY = 'track-flip-send'
+const readFlag = (key: string) => {
   try {
-    return localStorage.getItem(BLUR_KEY) === '1'
+    return localStorage.getItem(key) === '1'
   } catch {
     return false
+  }
+}
+const saveFlag = (key: string, on: boolean) => {
+  try {
+    localStorage.setItem(key, on ? '1' : '0')
+  } catch {
+    // Storage blocked: the choice lasts for this call only.
   }
 }
 
@@ -173,12 +182,13 @@ export function IncomingCall({ me }: { me: string }) {
   )
 }
 
-function Tile({ stream, name, id, state, self, onBlocked }: {
+function Tile({ stream, name, id, state, self, mirror, onBlocked }: {
   stream: MediaStream | null
   name: string
   id: string
   state: MediaState
   self?: boolean
+  mirror?: boolean
   onBlocked: () => void
 }) {
   const ref = useRef<HTMLVideoElement>(null)
@@ -193,7 +203,7 @@ function Tile({ stream, name, id, state, self, onBlocked }: {
   return (
     <div className={`tile ${state.screen ? 'sharing' : ''}`}>
       {/* The element stays in the page while hidden so the remote audio keeps playing. */}
-      <video ref={ref} autoPlay playsInline muted={self} className={showVideo ? '' : 'video-off'} />
+      <video ref={ref} autoPlay playsInline muted={self} className={`${showVideo ? '' : 'video-off'} ${mirror && !state.screen ? 'mirror' : ''}`} />
       {!showVideo && <Avatar name={name} id={id} size={64} />}
       <span className="tile-name">
         {!state.mic && <Icon name="micOff" />}
@@ -220,9 +230,14 @@ export function CallView({ ws, callId, me, names, onLeave }: {
   const [mini, setMini] = useState(() => matchMedia('(min-width: 801px)').matches)
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
   const [size, setSize] = useState<{ w: number; h: number } | null>(null)
-  const [blur, setBlur] = useState(() => blurSupported && readBlur())
+  const [blur, setBlur] = useState(() => blurSupported && readFlag(BLUR_KEY))
   const [blurBusy, setBlurBusy] = useState(false)
   const blurred = useRef<Blurred | null>(null)
+  // How I see myself (preview only) and how others see me (flips the outgoing video).
+  const [mirrorSelf, setMirrorSelf] = useState(() => readFlag(MIRROR_KEY))
+  const [flipSend, setFlipSend] = useState(() => readFlag(FLIP_KEY))
+  const [viewMenu, setViewMenu] = useState(false)
+  const flipped = useRef<Blurred | null>(null)
   const [ended, setEnded] = useState('')
   const [error, setError] = useState('')
   const [blocked, setBlocked] = useState(false)
@@ -244,7 +259,7 @@ export function CallView({ ws, callId, me, names, onLeave }: {
 
   const send = (to: string, s: Signal) =>
     void channel.current?.send({ type: 'broadcast', event: 'signal', payload: { ...s, from: session, to } satisfies Envelope })
-  const currentVideo = () => tracks.current.screen ?? blurred.current?.track ?? tracks.current.camera
+  const currentVideo = () => tracks.current.screen ?? flipped.current?.track ?? blurred.current?.track ?? tracks.current.camera
   const videoSenders = () =>
     [...pcs.current.values()].flatMap((pc) => pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video').map((t) => t.sender))
   const othersNow = () => Object.keys(channel.current?.presenceState() ?? {}).filter((k) => k !== session)
@@ -395,6 +410,8 @@ export function CallView({ ws, callId, me, names, onLeave }: {
       greeted.current.clear()
       for (const t of Object.values(tracks.current)) t?.stop()
       tracks.current = { audio: null, camera: null, screen: null }
+      flipped.current?.stop()
+      flipped.current = null
       blurred.current?.stop()
       blurred.current = null
       channel.current = null
@@ -438,8 +455,24 @@ export function CallView({ ws, callId, me, names, onLeave }: {
     }
   }
 
+  // Flips the camera (after blur) for everyone else. Rebuilt whenever the camera or blur changes.
+  const applyFlip = async (on: boolean) => {
+    flipped.current?.stop()
+    flipped.current = null
+    const base = blurred.current?.track ?? tracks.current.camera
+    if (on && base) {
+      try {
+        flipped.current = await flipTrack(base)
+      } catch (e) {
+        console.warn('flip', e)
+        setError('Could not flip your video on this device.')
+      }
+    }
+  }
+
   const toggleCam = async () => {
     if (tracks.current.camera) {
+      await applyFlip(false)
       await applyBlur(false)
       tracks.current.camera.stop()
       tracks.current.camera = null
@@ -451,6 +484,7 @@ export function CallView({ ws, callId, me, names, onLeave }: {
         return setError('Track could not use your camera. Allow it in your browser settings.')
       }
       if (blur) await applyBlur(true)
+      if (flipSend) await applyFlip(true)
     }
     swapVideo()
     update({ ...mineRef.current, cam: !!tracks.current.camera })
@@ -459,13 +493,21 @@ export function CallView({ ws, callId, me, names, onLeave }: {
   const toggleBlur = async () => {
     const on = !blur
     setBlur(on)
-    try {
-      localStorage.setItem(BLUR_KEY, on ? '1' : '0')
-    } catch {
-      // Storage blocked: the choice lasts for this call only.
-    }
+    saveFlag(BLUR_KEY, on)
     if (!tracks.current.camera) return
+    await applyFlip(false)
     await applyBlur(on)
+    if (flipSend) await applyFlip(true)
+    swapVideo()
+    update({ ...mineRef.current })
+  }
+
+  const toggleFlipSend = async () => {
+    const on = !flipSend
+    setFlipSend(on)
+    saveFlag(FLIP_KEY, on)
+    if (!tracks.current.camera) return
+    await applyFlip(on)
     swapVideo()
     update({ ...mineRef.current })
   }
@@ -569,7 +611,7 @@ export function CallView({ ws, callId, me, names, onLeave }: {
         <button className="btn primary unblock" onClick={unblock}>Tap to hear the call</button>
       )}
       <div className={`tiles count-${Math.min(others.length + 1, 5)}`}>
-        <Tile stream={selfStream} name={names.get(me) ?? 'You'} id={me} state={mine} self onBlocked={() => {}} />
+        <Tile stream={selfStream} name={names.get(me) ?? 'You'} id={me} state={mine} self mirror={mirrorSelf} onBlocked={() => {}} />
         {others.map((peer) => (
           <Tile key={peer} stream={remote[peer] ?? null} name={names.get(userOf(peer)) ?? 'Someone'} id={userOf(peer)}
             state={states[peer] ?? { mic: true, cam: false, screen: false }} onBlocked={() => setBlocked(true)} />
@@ -588,6 +630,23 @@ export function CallView({ ws, callId, me, names, onLeave }: {
             <Icon name="blur" /><span className="visually-hidden">{blur ? 'Turn background blur off' : 'Blur my background'}</span>
           </button>
         )}
+        <div className="call-view">
+          <button className={`btn call-btn ${viewMenu ? 'active' : ''}`} onClick={() => setViewMenu(!viewMenu)} aria-expanded={viewMenu} title="Mirror and flip">
+            <Icon name="flip" /><span className="visually-hidden">Mirror and flip</span>
+          </button>
+          {viewMenu && (
+            <div className="call-view-menu">
+              <label>
+                <input type="checkbox" checked={mirrorSelf} onChange={() => { setMirrorSelf(!mirrorSelf); saveFlag(MIRROR_KEY, !mirrorSelf) }} />
+                <span>Mirror my preview<small>Only how I see myself</small></span>
+              </label>
+              <label>
+                <input type="checkbox" checked={flipSend} onChange={() => void toggleFlipSend()} />
+                <span>Flip my video for others<small>What everyone else sees</small></span>
+              </label>
+            </div>
+          )}
+        </div>
         {canShare && (
           <button className={`btn call-btn ${mine.screen ? 'active' : ''}`} onClick={toggleScreen} title={mine.screen ? 'Stop sharing' : 'Share screen'}>
             <Icon name="monitor" /><span className="visually-hidden">{mine.screen ? 'Stop sharing' : 'Share screen'}</span>

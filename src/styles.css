@@ -587,3 +587,16 @@ progress.full::-moz-progress-bar { background: var(--danger); }
 .date-day.outside { color: var(--muted); opacity: 0.6; }
 .date-day.today { font-weight: 700; color: var(--accent); }
 .date-day.selected { background: var(--accent); color: var(--accent-text); }
+
+/* Call: mirror and flip options */
+.tile video.mirror { transform: scaleX(-1); }
+.call-view { position: relative; }
+.call-view-menu {
+  position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); z-index: 2;
+  display: flex; flex-direction: column; gap: 4px; width: 250px; padding: 8px;
+  background: #1d212b; border-radius: 14px; box-shadow: 0 12px 30px rgb(0 0 0 / 0.5);
+}
+.call-view-menu label { display: flex; align-items: flex-start; gap: 12px; padding: 10px; border-radius: 10px; cursor: pointer; font-weight: 600; }
+.call-view-menu label:hover { background: #2a2f3b; }
+.call-view-menu input { margin-top: 2px; }
+.call-view-menu small { display: block; font-weight: 400; color: #9aa1ad; font-size: 0.8rem; }

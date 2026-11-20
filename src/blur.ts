@@ -114,3 +114,35 @@ export async function blurTrack(input: MediaStreamTrack): Promise<Blurred> {
     },
   }
 }
+
+/** Mirrors a video track left-to-right, for cameras that send a flipped picture. */
+export async function flipTrack(input: MediaStreamTrack): Promise<Blurred> {
+  const video = document.createElement('video')
+  video.muted = true
+  video.playsInline = true
+  video.srcObject = new MediaStream([input])
+  await video.play()
+  const out = canvas(video.videoWidth || 640, video.videoHeight || 480)
+  const ctx = out.getContext('2d')!
+  let running = true
+  let timer = 0
+  const frame = () => {
+    if (!running) return
+    if (video.readyState >= 2) {
+      ctx.setTransform(-1, 0, 0, 1, out.width, 0)
+      ctx.drawImage(video, 0, 0, out.width, out.height)
+    }
+    timer = window.setTimeout(frame, FRAME_MS) // Not rAF, for the same background-tab reason as blur.
+  }
+  frame()
+  const track = out.captureStream(25).getVideoTracks()[0]
+  return {
+    track,
+    stop: () => {
+      running = false
+      clearTimeout(timer)
+      track.stop()
+      video.srcObject = null
+    },
+  }
+}
