@@ -89,19 +89,24 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'message_reactions' }, ({ old }) =>
         setReactions((prev) => prev.filter((x) => !sameReaction(x, old as Reaction))),
       )
-      .subscribe()
-    supabase
-      .from('messages')
-      .select('*')
-      .eq('workspace_id', ws.id)
-      .order('created_at', { ascending: false })
-      .limit(PAGE)
-      .then(({ data, error }) => {
-        if (error) return setError(error.message)
-        setHasMore(data.length === PAGE)
-        setMessages((prev) => (data as Message[]).reduce(upsert, prev).sort((a, b) => a.created_at.localeCompare(b.created_at)))
-        void loadReactions((data as Message[]).map((m) => m.id))
-      })
+    const loadLatest = () =>
+      supabase
+        .from('messages')
+        .select('*')
+        .eq('workspace_id', ws.id)
+        .order('created_at', { ascending: false })
+        .limit(PAGE)
+        .then(({ data, error }) => {
+          if (error) return setError(error.message)
+          setHasMore((more) => more || data.length === PAGE)
+          setMessages((prev) => (data as Message[]).reduce(upsert, prev).sort((a, b) => a.created_at.localeCompare(b.created_at)))
+          void loadReactions((data as Message[]).map((m) => m.id))
+        })
+    // Realtime doesn't replay events missed while the tab slept or the socket was down; refetch on every (re)subscribe and on return.
+    channel.subscribe((status) => status === 'SUBSCRIBED' && void loadLatest())
+    const onReturn = () => !document.hidden && void loadLatest()
+    document.addEventListener('visibilitychange', onReturn)
+    window.addEventListener('online', onReturn)
     supabase
       .from('messages')
       .select('*')
@@ -110,7 +115,11 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
       .order('pinned_at', { ascending: false })
       .limit(20)
       .then(({ data }) => data && setPinned(data as Message[]))
-    return () => void supabase.removeChannel(channel)
+    return () => {
+      document.removeEventListener('visibilitychange', onReturn)
+      window.removeEventListener('online', onReturn)
+      void supabase.removeChannel(channel)
+    }
   }, [ws.id, ws.name, me])
 
   // Titles for cards shared into chat.
