@@ -35,6 +35,9 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null)
   const [picker, setPicker] = useState<string | null>(null)
+  // Touch screens show message actions in a per-message menu instead of on hover.
+  const [menu, setMenu] = useState<string | null>(null)
+  const [menuUp, setMenuUp] = useState(false)
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
@@ -408,7 +411,17 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
           )}
         </div>
         {actions && editing?.id !== m.id && (
-          <span className="message-actions">
+          <button className="btn ghost icon-btn small message-more" title="More" aria-expanded={menu === m.id}
+            onClick={(e) => {
+              // Open upward in the lower half so the newest messages' menus aren't cut off.
+              setMenuUp(e.currentTarget.getBoundingClientRect().top > window.innerHeight / 2)
+              setMenu(menu === m.id ? null : m.id)
+            }}>
+            <Icon name="more" /><span className="visually-hidden">More actions</span>
+          </button>
+        )}
+        {actions && editing?.id !== m.id && (
+          <span className={`message-actions ${menu === m.id ? `open${menuUp ? ' up' : ''}` : ''}`} onClick={() => setMenu(null)}>
             <button className="btn ghost icon-btn small" title="React" aria-expanded={picker === m.id} onClick={() => setPicker(picker === m.id ? null : m.id)}>
               <Icon name="smile" /><span className="visually-hidden">React</span>
             </button>
@@ -436,6 +449,15 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
       </article>
     )
   }
+
+  useEffect(() => {
+    if (!menu) return
+    const close = (e: Event) => {
+      if (!(e.target as Element).closest?.('.message-actions, .message-more')) setMenu(null)
+    }
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  }, [menu])
 
   const typingNames = typing.map((id) => names.get(id)).filter(Boolean)
 
