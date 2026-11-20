@@ -46,6 +46,7 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
   const composer = useRef<HTMLTextAreaElement>(null)
   const atBottom = useRef(true)
   const typingTimer = useRef<number | undefined>(undefined)
+  const typingSent = useRef(0)
   const namesRef = useRef(names)
   namesRef.current = names
 
@@ -186,15 +187,34 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
     setResults(data as Message[])
   }
 
+  const stopTyping = () => {
+    if (typingTimer.current === undefined) return
+    clearTimeout(typingTimer.current)
+    typingTimer.current = undefined
+    setTyping(false)
+  }
   const typingChanged = (value: string) => {
     setDraft(value)
-    if (typingTimer.current === undefined) setTyping(true)
+    if (!value.trim()) return stopTyping()
+    // Refresh while typing continues; receivers drop flags older than 8s.
+    if (typingTimer.current === undefined || Date.now() - typingSent.current > 4000) {
+      typingSent.current = Date.now()
+      setTyping(true)
+    }
     clearTimeout(typingTimer.current)
-    typingTimer.current = window.setTimeout(() => {
-      typingTimer.current = undefined
-      setTyping(false)
-    }, 3000)
+    typingTimer.current = window.setTimeout(stopTyping, 3000)
   }
+  // Stop when the app is hidden or the chat closes; a frozen background tab never runs the timer.
+  const stopTypingRef = useRef(stopTyping)
+  stopTypingRef.current = stopTyping
+  useEffect(() => {
+    const hide = () => document.hidden && stopTypingRef.current()
+    document.addEventListener('visibilitychange', hide)
+    return () => {
+      document.removeEventListener('visibilitychange', hide)
+      stopTypingRef.current()
+    }
+  }, [])
 
   type Extra = { image_path?: string; file_path?: string; file_name?: string; file_size?: number }
   const post = async (extra: Extra = {}) => {
@@ -209,9 +229,7 @@ export function Chat({ ws, me, names, typing, setTyping, onOpenCard, lastReadAt,
     atBottom.current = true
     setDraft('')
     setReplyTo(null)
-    clearTimeout(typingTimer.current)
-    typingTimer.current = undefined
-    setTyping(false)
+    stopTyping()
     setMessages((prev) => upsert(prev, data as Message))
   }
 

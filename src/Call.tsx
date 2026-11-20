@@ -219,6 +219,7 @@ export function CallView({ ws, callId, me, names, onLeave }: {
   // Desktop: a floating window over the app, like Teams. Phones: full screen, with a minimise button.
   const [mini, setMini] = useState(() => matchMedia('(min-width: 801px)').matches)
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
   const [blur, setBlur] = useState(() => blurSupported && readBlur())
   const [blurBusy, setBlurBusy] = useState(false)
   const blurred = useRef<Blurred | null>(null)
@@ -494,6 +495,24 @@ export function CallView({ ws, callId, me, names, onLeave }: {
     addEventListener('pointerup', up)
   }
 
+  // Resize the floating window from its top-left corner, since it starts docked bottom-right.
+  const startResize = (e: ReactPointerEvent<HTMLElement>) => {
+    e.preventDefault()
+    const box = e.currentTarget.parentElement!.getBoundingClientRect()
+    const move = (ev: PointerEvent) => {
+      const x = Math.min(Math.max(0, ev.clientX), box.right - 240)
+      const y = Math.min(Math.max(0, ev.clientY), box.bottom - 200)
+      setPos({ x, y })
+      setSize({ w: box.right - x, h: box.bottom - y })
+    }
+    const up = () => {
+      removeEventListener('pointermove', move)
+      removeEventListener('pointerup', up)
+    }
+    addEventListener('pointermove', move)
+    addEventListener('pointerup', up)
+  }
+
   const stopScreen = () => {
     tracks.current.screen?.stop()
     tracks.current.screen = null
@@ -534,7 +553,8 @@ export function CallView({ ws, callId, me, names, onLeave }: {
 
   return (
     <div className={`call ${mini ? 'mini' : ''}`} role="dialog" aria-label={`Call in ${ws.name}`}
-      style={mini && pos ? { left: pos.x, top: pos.y, right: 'auto', bottom: 'auto' } : undefined}>
+      style={mini ? { ...(pos && { left: pos.x, top: pos.y, right: 'auto', bottom: 'auto' }), ...(size && { width: size.w, height: size.h, maxHeight: 'none' }) } : undefined}>
+      {mini && <span className="call-resize" onPointerDown={startResize} title="Drag to resize" aria-hidden="true" />}
       <header className="call-head" onPointerDown={startDrag} title={mini ? 'Drag to move' : undefined}>
         <span className="grow">
           <strong>{ws.name}</strong>
